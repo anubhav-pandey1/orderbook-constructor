@@ -4,12 +4,50 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"reflect"
 	"testing"
+	"time"
 
 	"orderbook/book"
 	"orderbook/feed"
 	"orderbook/feed/gencsv"
+	"orderbook/internal/clock"
+	"orderbook/internal/syncx"
 )
+
+func TestRecordGeneratorDeterministic(t *testing.T) {
+	cfg := gencsv.DefaultConfig()
+	cfg.Incrementals, cfg.SnapshotEvery = 2_000, 500
+	a, err := gencsv.NewGenerator(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := gencsv.NewGenerator(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	for {
+		left, lok := a.Next()
+		right, rok := b.Next()
+		if lok != rok {
+			t.Fatalf("length differs at %d", n)
+		}
+		if !lok {
+			break
+		}
+		if !reflect.DeepEqual(left, right) {
+			t.Fatalf("record %d differs", n)
+		}
+		if !left.HasUpdateID || left.FinalUpdateID != uint64(n+1) {
+			t.Fatalf("record %d ID=%d", n, left.FinalUpdateID)
+		}
+		n++
+	}
+	if n != cfg.Incrementals+1 {
+		t.Fatalf("records=%d want=%d", n, cfg.Incrementals+1)
+	}
+}
 
 func TestGeneratedCSVReplay(t *testing.T) {
 	cfg := gencsv.DefaultConfig()
@@ -22,10 +60,11 @@ func TestGeneratedCSVReplay(t *testing.T) {
 	}
 
 	dec := feed.NewDecoder(&buf)
-	bk := book.New("binance", "BTC/USDT", book.Config{CrossedPolicy: book.PolicyStrict, LevelHint: 512})
-	sync := &feed.TimestampPolicy{Mode: book.PolicyStrict}
+	bk := book.New(512)
+	sync := syncx.NewTimestampPolicy(syncx.TimestampStep, cfg.TSStep)
 
-	st, err := feed.Replay(context.Background(), dec, bk, nil, feed.Config{Mode: feed.Fast, Sync: sync}, feed.RealClock{})
+	st, err := feed.Replay(context.Background(), dec, bk, sync, nil, nil,
+		feed.ReplayCfg{Mode: feed.Fast, Speed: 1, TSUnit: time.Millisecond, Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"}}, clock.NewReal())
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -35,19 +74,19 @@ func TestGeneratedCSVReplay(t *testing.T) {
 	wantIncrementals := cfg.Incrementals - midSnapshots
 	wantAccepted := wantSnapshots + wantIncrementals
 
-	if int64(st.Accepted) != wantAccepted {
-		t.Fatalf("accepted = %d, want %d", st.Accepted, wantAccepted)
+	if int64(st.Applied) != wantAccepted {
+		t.Fatalf("accepted = %d, want %d", st.Applied, wantAccepted)
 	}
 	if st.Snapshots != uint64(wantSnapshots) {
 		t.Fatalf("snapshots = %d, want %d", st.Snapshots, wantSnapshots)
 	}
-	if st.Incrementals != uint64(wantIncrementals) {
-		t.Fatalf("incrementals = %d, want %d", st.Incrementals, wantIncrementals)
+	if st.Deltas != uint64(wantIncrementals) {
+		t.Fatalf("incrementals = %d, want %d", st.Deltas, wantIncrementals)
 	}
 
-	tob := bk.BestBidAsk()
-	if !tob.HasBid || !tob.HasAsk || tob.BidPrice >= tob.AskPrice {
-		t.Fatalf("final book crossed or empty: %+v", tob)
+	bbo := bk.BBOSnapshot()
+	if !bbo.BidOK || !bbo.AskOK || bbo.BidPx >= bbo.AskPx {
+		t.Fatalf("final book crossed or empty: %+v", bbo)
 	}
 }
 
@@ -62,10 +101,11 @@ func TestGeneratedCSVStressNoCross(t *testing.T) {
 	}
 
 	dec := feed.NewDecoder(&buf)
-	bk := book.New("binance", "BTC/USDT", book.Config{CrossedPolicy: book.PolicyStrict, LevelHint: 512})
-	sync := &feed.TimestampPolicy{Mode: book.PolicyStrict}
+	bk := book.New(512)
+	sync := syncx.NewTimestampPolicy(syncx.TimestampStep, cfg.TSStep)
 
-	if _, err := feed.Replay(context.Background(), dec, bk, nil, feed.Config{Mode: feed.Fast, Sync: sync}, feed.RealClock{}); err != nil {
+	if _, err := feed.Replay(context.Background(), dec, bk, sync, nil, nil,
+		feed.ReplayCfg{Mode: feed.Fast, Speed: 1, TSUnit: time.Millisecond, Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"}}, clock.NewReal()); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 }

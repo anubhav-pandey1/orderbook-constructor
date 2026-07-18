@@ -3,180 +3,182 @@ package book
 import (
 	"errors"
 	"sort"
-	"time"
 )
 
 var (
-	ErrNotInitialized  = errors.New("book not initialized: incremental before snapshot")
-	ErrCrossedBook     = errors.New("crossed book: best bid >= best ask")
+	ErrCrossedSnapshot = errors.New("crossed snapshot")
+	ErrCrossedDelta    = errors.New("delta crossed book")
+	ErrEmptySnapshot   = errors.New("snapshot has no levels")
 	ErrDuplicatePrice  = errors.New("duplicate price in snapshot")
-	ErrInvalidQuantity = errors.New("invalid (non-positive) quantity in snapshot")
+	ErrInvalidQuantity = errors.New("invalid quantity")
+	ErrInvalidPrice    = errors.New("invalid price")
 	ErrInvalidSide     = errors.New("invalid side")
 )
 
-// Config configures a Book instance.
-type Config struct {
-	CrossedPolicy Policy // Off | Warn | Strict for the crossed-book check
-	LevelHint     int    // per-side map/heap preallocation hint
-}
+const defaultLevelHint = 256
 
-// Book is a single-writer aggregated L2 order book for one exchange/symbol.
 type Book struct {
-	exchange    string
-	symbol      string
-	initialized bool
-	version     uint64
-	bids        sideBook
-	asks        sideBook
-	quotes      quoteCache
-	crossed     Policy
-
-	CrossedCount uint64 // number of crossed states observed under Warn policy
+	capHint int
+	version uint64
+	bids    sideBook
+	asks    sideBook
+	quotes  quoteCache
 }
 
-func New(exchange, symbol string, cfg Config) *Book {
-	h := cfg.LevelHint
-	if h <= 0 {
-		h = 256
+func New(capHint int) *Book {
+	if capHint <= 0 {
+		capHint = defaultLevelHint
 	}
-	return &Book{
-		exchange: exchange,
-		symbol:   symbol,
-		crossed:  cfg.CrossedPolicy,
-		bids:     newSideBook(Bid, h),
-		asks:     newSideBook(Ask, h),
+	b := &Book{
+		capHint: capHint,
+		bids:    newSideBook(Bid, capHint),
+		asks:    newSideBook(Ask, capHint),
 	}
+	b.quotes.store(BBO{})
+	return b
 }
 
-func (b *Book) Version() uint64    { return b.version }
-func (b *Book) Initialized() bool  { return b.initialized }
-func (b *Book) Exchange() string   { return b.exchange }
-func (b *Book) Symbol() string     { return b.symbol }
-func (b *Book) BidLevelCount() int { return len(b.bids.levels) }
-func (b *Book) AskLevelCount() int { return len(b.asks.levels) }
+func (b *Book) ApplySnapshot(sn *Snapshot) (BBO, error) {
+	if sn == nil || len(sn.Bids)+len(sn.Asks) == 0 {
+		return BBO{}, ErrEmptySnapshot
+	}
+	bids, err := buildSide(Bid, sn.Bids, b.capHint)
+	if err != nil {
+		return BBO{}, err
+	}
+	asks, err := buildSide(Ask, sn.Asks, b.capHint)
+	if err != nil {
+		return BBO{}, err
+	}
+	bidPx, bidQty, bidOK := bids.best()
+	askPx, askQty, askOK := asks.best()
+	if bidOK && askOK && bidPx >= askPx {
+		return BBO{}, ErrCrossedSnapshot
+	}
+	version := b.version + 1
+	bbo := BBO{
+		BidPx: bidPx, BidQty: bidQty, BidOK: bidOK,
+		AskPx: askPx, AskQty: askQty, AskOK: askOK,
+		Version: version,
+	}
+	b.bids, b.asks = bids, asks
+	b.version = version
+	b.quotes.store(bbo)
+	return bbo, nil
+}
 
-// ApplySnapshot builds both sides off-book, validates, and swaps them in as one
-// operation. No observer sees a partially built snapshot.
-func (b *Book) ApplySnapshot(sn Snapshot, ingress time.Time) (BookEvent, error) {
-	nb, err := buildSide(Bid, sn.Bids)
-	if err != nil {
-		return BookEvent{}, err
+func buildSide(side Side, levels []Level, capHint int) (sideBook, error) {
+	if len(levels) > capHint {
+		capHint = len(levels)
 	}
-	na, err := buildSide(Ask, sn.Asks)
-	if err != nil {
-		return BookEvent{}, err
-	}
-	bb, bq, hb := nb.best()
-	ab, aq, ha := na.best()
-	if hb && ha && bb >= ab {
-		switch b.crossed {
-		case PolicyStrict:
-			return BookEvent{}, ErrCrossedBook
-		case PolicyWarn:
-			b.CrossedCount++
+	s := newSideBook(side, capHint)
+	for _, candidate := range levels {
+		if candidate.Price < 0 {
+			return sideBook{}, ErrInvalidPrice
 		}
-	}
-	b.bids = nb
-	b.asks = na
-	b.initialized = true
-	b.version++
-	tob := TopOfBook{BidPrice: bb, BidQty: bq, AskPrice: ab, AskQty: aq, HasBid: hb, HasAsk: ha}
-	b.quotes.store(b.version, tob)
-	return b.event(EventSnapshot, 0, sn.ExchangeTime, ingress, tob), nil
-}
-
-func buildSide(side Side, levels []Level) (sideBook, error) {
-	s := newSideBook(side, len(levels)+8)
-	for _, lv := range levels {
-		if lv.Qty <= 0 {
+		if candidate.Qty <= 0 {
 			return sideBook{}, ErrInvalidQuantity
 		}
-		if _, dup := s.levels[lv.Price]; dup {
+		if _, exists := s.levels[candidate.Price]; exists {
 			return sideBook{}, ErrDuplicatePrice
 		}
-		g := s.nextGen
-		s.nextGen++
-		s.levels[lv.Price] = level{quantity: lv.Qty, generation: g}
-		s.prices.push(heapEntry{price: lv.Price, generation: g})
+		s.set(candidate.Price, candidate.Qty)
 	}
 	return s, nil
 }
 
-// ApplyIncremental applies a single per-price-level delta. Qty==0 deletes;
-// deleting an absent level is an idempotent no-op that still bumps the version.
-func (b *Book) ApplyIncremental(inc Incremental, ingress time.Time) (BookEvent, error) {
-	if !b.initialized {
-		return BookEvent{}, ErrNotInitialized
+func (b *Book) ApplyDelta(side Side, px Price, qty Quantity) (DeltaResult, error) {
+	if px < 0 {
+		return DeltaResult{}, ErrInvalidPrice
 	}
-	var s *sideBook
-	switch inc.Side {
+	if qty < 0 {
+		return DeltaResult{}, ErrInvalidQuantity
+	}
+	var target *sideBook
+	switch side {
 	case Bid:
-		s = &b.bids
+		target = &b.bids
 	case Ask:
-		s = &b.asks
+		target = &b.asks
 	default:
-		return BookEvent{}, ErrInvalidSide
+		return DeltaResult{}, ErrInvalidSide
 	}
-	if inc.Qty > 0 {
-		s.set(inc.Price, inc.Qty)
-	} else {
-		s.del(inc.Price)
-	}
-	s.maybeRebuild()
-
-	bb, bq, hb := b.bids.best()
-	ab, aq, ha := b.asks.best()
-	if hb && ha && bb >= ab {
-		switch b.crossed {
-		case PolicyStrict:
-			return BookEvent{}, ErrCrossedBook
-		case PolicyWarn:
-			b.CrossedCount++
+	_, exists := target.levels[px]
+	kind := deltaKind(exists, qty)
+	if qty > 0 {
+		if side == Bid {
+			askPx, _, askOK := b.asks.best()
+			if askOK && px >= askPx {
+				return DeltaResult{BBO: b.BBOSnapshot(), Kind: kind}, ErrCrossedDelta
+			}
+		} else {
+			bidPx, _, bidOK := b.bids.best()
+			if bidOK && bidPx >= px {
+				return DeltaResult{BBO: b.BBOSnapshot(), Kind: kind}, ErrCrossedDelta
+			}
 		}
+		target.set(px, qty)
+	} else if exists {
+		target.del(px)
 	}
-	b.version++
-	tob := TopOfBook{BidPrice: bb, BidQty: bq, AskPrice: ab, AskQty: aq, HasBid: hb, HasAsk: ha}
-	b.quotes.store(b.version, tob)
-	return b.event(EventIncremental, inc.Side, inc.ExchangeTime, ingress, tob), nil
+	target.maybeRebuild()
+	version := b.version + 1
+	bbo := b.privateBBO(version)
+	if bbo.BidOK && bbo.AskOK && bbo.BidPx >= bbo.AskPx {
+		return DeltaResult{BBO: b.BBOSnapshot(), Kind: kind}, ErrCrossedDelta
+	}
+	b.version = version
+	b.quotes.store(bbo)
+	return DeltaResult{BBO: bbo, Kind: kind}, nil
 }
 
-func (b *Book) event(kind EventKind, side Side, exTime int64, ingress time.Time, tob TopOfBook) BookEvent {
-	return BookEvent{
-		Version:      b.version,
-		Kind:         kind,
-		Side:         side,
-		ExchangeTime: exTime,
-		IngressAt:    ingress,
-		AppliedAt:    time.Now(),
-		BestBidPrice: tob.BidPrice,
-		BestBidQty:   tob.BidQty,
-		BestAskPrice: tob.AskPrice,
-		BestAskQty:   tob.AskQty,
-		HasBid:       tob.HasBid,
-		HasAsk:       tob.HasAsk,
+func deltaKind(exists bool, qty Quantity) DeltaKind {
+	if qty == 0 {
+		if exists {
+			return LevelDeleted
+		}
+		return AbsentDelete
+	}
+	if exists {
+		return LevelUpdated
+	}
+	return LevelInserted
+}
+
+func (b *Book) privateBBO(version uint64) BBO {
+	bidPx, bidQty, bidOK := b.bids.best()
+	askPx, askQty, askOK := b.asks.best()
+	return BBO{
+		BidPx: bidPx, BidQty: bidQty, BidOK: bidOK,
+		AskPx: askPx, AskQty: askQty, AskOK: askOK,
+		Version: version,
 	}
 }
 
-// BestBidAsk is safe for concurrent callers via the seqlock quote cache.
-func (b *Book) BestBidAsk() TopOfBook {
-	_, tob := b.quotes.load()
-	return tob
+func (b *Book) Invalidate() {
+	b.bids = newSideBook(Bid, b.capHint)
+	b.asks = newSideBook(Ask, b.capHint)
+	b.quotes.store(BBO{Version: b.version})
 }
 
-// DepthSnapshot returns a sorted full-depth view. Writer-owned/quiesced access
-// only (it iterates the maps directly).
+func (b *Book) BBOSnapshot() BBO { return b.quotes.load() }
+func (b *Book) Version() uint64  { return b.quotes.load().Version }
+
 func (b *Book) DepthSnapshot() Depth {
-	d := Depth{
+	depth := Depth{
 		Bids: make([]Level, 0, len(b.bids.levels)),
 		Asks: make([]Level, 0, len(b.asks.levels)),
 	}
-	for p, lv := range b.bids.levels {
-		d.Bids = append(d.Bids, Level{Price: p, Qty: lv.quantity})
+	for px, level := range b.bids.levels {
+		depth.Bids = append(depth.Bids, Level{Price: px, Qty: level.quantity})
 	}
-	for p, lv := range b.asks.levels {
-		d.Asks = append(d.Asks, Level{Price: p, Qty: lv.quantity})
+	for px, level := range b.asks.levels {
+		depth.Asks = append(depth.Asks, Level{Price: px, Qty: level.quantity})
 	}
-	sort.Slice(d.Bids, func(i, j int) bool { return d.Bids[i].Price > d.Bids[j].Price })
-	sort.Slice(d.Asks, func(i, j int) bool { return d.Asks[i].Price < d.Asks[j].Price })
-	return d
+	sort.Slice(depth.Bids, func(i, j int) bool { return depth.Bids[i].Price > depth.Bids[j].Price })
+	sort.Slice(depth.Asks, func(i, j int) bool { return depth.Asks[i].Price < depth.Asks[j].Price })
+	return depth
 }
+
+func (b *Book) BidLevelCount() int { return len(b.bids.levels) }
+func (b *Book) AskLevelCount() int { return len(b.asks.levels) }

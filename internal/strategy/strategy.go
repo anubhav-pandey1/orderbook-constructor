@@ -1,79 +1,120 @@
-// Package strategy consumes book events from the SPSC event ring, optionally
-// records pipeline latency, and forwards a structured record to the async
-// logger. It is the single consumer of the event ring.
 package strategy
 
 import (
 	"context"
-	"time"
-
-	"orderbook/book"
-	"orderbook/internal/asynclog"
-	"orderbook/internal/metrics"
+	"errors"
+	"orderbook/internal/bench"
+	"orderbook/internal/clock"
+	"orderbook/internal/logx"
+	"orderbook/internal/pipeline"
 	"orderbook/internal/ring"
 )
 
-// Strategy turns a book event into a log record. The dummy assignment strategy
-// simply reports the best bid/ask.
-type Strategy interface {
-	OnBookEvent(book.BookEvent) asynclog.LogRecord
-}
+const defaultSpinIters = 128
 
-// BBO is the dummy strategy: read best bid and best ask, emit them.
-type BBO struct{}
+type Strategy interface{ OnEvent(pipeline.Event, int64) }
+type Latency struct{ IngressToRecv, ApplyToRecv, DueToRecv, SchedulerLateness *bench.Hist }
 
-func (BBO) OnBookEvent(e book.BookEvent) asynclog.LogRecord {
-	return asynclog.LogRecord{
-		Version:      e.Version,
-		ExchangeTime: e.ExchangeTime,
-		BidPrice:     e.BestBidPrice,
-		BidQty:       e.BestBidQty,
-		AskPrice:     e.BestAskPrice,
-		AskQty:       e.BestAskQty,
-		HasBid:       e.HasBid,
-		HasAsk:       e.HasAsk,
+func (l *Latency) Record(e pipeline.Event, recv int64) {
+	if l == nil {
+		return
+	}
+	if l.IngressToRecv != nil && recv >= e.IngressNS {
+		l.IngressToRecv.Record(recv - e.IngressNS)
+	}
+	if l.ApplyToRecv != nil && recv >= e.ApplyNS {
+		l.ApplyToRecv.Record(recv - e.ApplyNS)
+	}
+	if e.DueNS != 0 {
+		if l.DueToRecv != nil && recv >= e.DueNS {
+			l.DueToRecv.Record(recv - e.DueNS)
+		}
+		if l.SchedulerLateness != nil && e.IngressNS >= e.DueNS {
+			l.SchedulerLateness.Record(e.IngressNS - e.DueNS)
+		}
 	}
 }
 
-// Latency holds the two measured spans. Nil disables latency recording.
-type Latency struct {
-	IngressToRecv *metrics.Histogram
-	ApplyToRecv   *metrics.Histogram
+type NopStrategy struct {
+	H       *bench.Hist
+	Latency *Latency
 }
 
-// Run consumes events until the ring is closed and drained, then closes the
-// logger. It records latency (if lat != nil), invokes the strategy, and pushes
-// the resulting record to the logger.
-func Run(ctx context.Context, in *ring.SPSC[book.BookEvent], lg *asynclog.Logger, s Strategy, lat *Latency, spin int) error {
-	for {
-		ev, ok, err := in.Pop(ctx, spin)
-		if err != nil {
-			if lg != nil {
-				lg.Close()
-			}
-			return err
+func (s *NopStrategy) OnEvent(e pipeline.Event, r int64) {
+	if s == nil {
+		return
+	}
+	if s.H != nil && r >= e.IngressNS {
+		s.H.Record(r - e.IngressNS)
+	}
+	s.Latency.Record(e, r)
+}
+
+type LogStrategy struct {
+	logger     *logx.Logger
+	latency    *Latency
+	ctx        context.Context
+	err        error
+	actionable bool
+}
+
+func NewLogStrategy(ctx context.Context, l *logx.Logger, h *Latency) *LogStrategy {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &LogStrategy{logger: l, latency: h, ctx: ctx}
+}
+func (s *LogStrategy) OnEvent(e pipeline.Event, r int64) {
+	if s == nil || s.err != nil {
+		return
+	}
+	s.latency.Record(e, r)
+	s.actionable = e.Actionable()
+	if s.logger == nil {
+		return
+	}
+	s.err = s.logger.Log(s.ctx, logx.Record{NotificationID: e.NotificationID, Version: e.Version, SyncEpoch: e.SyncEpoch, Kind: e.Kind, State: e.State, Reason: e.Reason, BidPx: e.BidPx, AskPx: e.AskPx, BidQty: e.BidQty, AskQty: e.AskQty, BidOK: e.BidOK, AskOK: e.AskOK, EventTS: e.EventTS, DueNS: e.DueNS, IngressNS: e.IngressNS, ApplyNS: e.ApplyNS, RecvNS: r})
+}
+func (s *LogStrategy) Err() error {
+	if s == nil {
+		return nil
+	}
+	return s.err
+}
+func (s *LogStrategy) Close() error {
+	if s == nil || s.logger == nil {
+		return nil
+	}
+	return s.logger.Close()
+}
+func (s *LogStrategy) Actionable() bool { return s != nil && s.actionable }
+func Run(ctx context.Context, in *ring.SPSC[pipeline.Event], s Strategy, c clock.Clock) error {
+	return RunWithSpin(ctx, in, s, c, defaultSpinIters)
+}
+func RunWithSpin(ctx context.Context, in *ring.SPSC[pipeline.Event], s Strategy, c clock.Clock, spin int) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if in == nil || s == nil || c == nil {
+		return errors.New("strategy: nil dependency")
+	}
+	defer func() {
+		if x, ok := s.(interface{ Close() error }); ok {
+			err = errors.Join(err, x.Close())
 		}
-		if !ok { // event ring closed and drained
-			if lg != nil {
-				lg.Close()
-			}
+	}()
+	for {
+		e, ok, x := in.ConsumeWait(ctx, spin)
+		if x != nil {
+			return x
+		}
+		if !ok {
 			return nil
 		}
-		if lat != nil {
-			recv := time.Now()
-			if !ev.IngressAt.IsZero() {
-				lat.IngressToRecv.RecordDuration(recv.Sub(ev.IngressAt))
-			}
-			if !ev.AppliedAt.IsZero() {
-				lat.ApplyToRecv.RecordDuration(recv.Sub(ev.AppliedAt))
-			}
-		}
-		rec := s.OnBookEvent(ev)
-		if lg != nil {
-			if err := lg.Log(ctx, rec); err != nil {
-				lg.Close()
-				return err
-			}
+		recv := c.NowNS()
+		s.OnEvent(e, recv)
+		if x, ok := s.(interface{ Err() error }); ok && x.Err() != nil {
+			return x.Err()
 		}
 	}
 }

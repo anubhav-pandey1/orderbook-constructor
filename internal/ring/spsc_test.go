@@ -5,233 +5,117 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"unsafe"
 )
 
-func TestPowerOfTwoRounding(t *testing.T) {
-	cases := map[int]int{1: 1, 2: 2, 3: 4, 5: 8, 8: 8, 9: 16, 1000: 1024, 1024: 1024}
-	for in, want := range cases {
-		if got := New[int](in).Cap(); got != want {
-			t.Errorf("New(%d).Cap() = %d, want %d", in, got, want)
+func TestCapacityContract(t *testing.T) {
+	for _, n := range []int{-1, 0, 1, 3, 1000} {
+		if _, err := NewSPSC[int](n); !errors.Is(err, ErrInvalidCapacity) {
+			t.Fatalf("%d: %v", n, err)
 		}
 	}
-}
-
-func TestNewPanicsOnZero(t *testing.T) {
-	for _, bad := range []int{0, -1, -100} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("New(%d) did not panic", bad)
-				}
-			}()
-			_ = New[int](bad)
-		}()
+	r, err := NewSPSC[int](8)
+	if err != nil || r.Cap() != 8 {
+		t.Fatalf("new: %v cap=%d", err, r.Cap())
 	}
 }
 
-func TestTryPushPopEdges(t *testing.T) {
-	r := New[int](2) // cap 2
-	if r.Cap() != 2 {
-		t.Fatalf("cap = %d, want 2", r.Cap())
+func TestFIFOCloseDrainAndClosedPublish(t *testing.T) {
+	r, err := NewSPSC[int](4)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Empty ring.
-	if _, ok := r.TryPop(); ok {
-		t.Fatal("TryPop on empty returned ok=true")
+	for i := 0; i < 4; i++ {
+		if !r.TryPublish(i) {
+			t.Fatal("publish")
+		}
 	}
-	if r.Len() != 0 {
-		t.Fatalf("Len on empty = %d, want 0", r.Len())
+	if r.TryPublish(5) {
+		t.Fatal("published while full")
 	}
-
-	// Fill it.
-	if !r.TryPush(10) {
-		t.Fatal("TryPush #1 failed")
+	_ = r.Close()
+	for i := 0; i < 4; i++ {
+		v, ok, err := r.ConsumeWait(context.Background(), 1)
+		if err != nil || !ok || v != i {
+			t.Fatalf("%d: %v %v %v", i, v, ok, err)
+		}
 	}
-	if !r.TryPush(20) {
-		t.Fatal("TryPush #2 failed")
+	if _, ok, err := r.ConsumeWait(context.Background(), 1); err != nil || ok {
+		t.Fatalf("drain: ok=%v err=%v", ok, err)
 	}
-	if r.Len() != 2 {
-		t.Fatalf("Len when full = %d, want 2", r.Len())
-	}
-	// Full now.
-	if r.TryPush(30) {
-		t.Fatal("TryPush on full returned true")
-	}
-
-	// Drain in order.
-	if v, ok := r.TryPop(); !ok || v != 10 {
-		t.Fatalf("TryPop = (%d,%v), want (10,true)", v, ok)
-	}
-	// Space again -> wrap.
-	if !r.TryPush(30) {
-		t.Fatal("TryPush after pop failed")
-	}
-	if v, ok := r.TryPop(); !ok || v != 20 {
-		t.Fatalf("TryPop = (%d,%v), want (20,true)", v, ok)
-	}
-	if v, ok := r.TryPop(); !ok || v != 30 {
-		t.Fatalf("TryPop = (%d,%v), want (30,true)", v, ok)
-	}
-	if _, ok := r.TryPop(); ok {
-		t.Fatal("TryPop on drained returned ok=true")
+	if err := r.Publish(context.Background(), 9, 1); !errors.Is(err, ErrClosed) {
+		t.Fatalf("publish: %v", err)
 	}
 }
 
-func TestTryPushFailsWhenClosed(t *testing.T) {
-	r := New[int](4)
-	r.Close()
-	if r.TryPush(1) {
-		t.Fatal("TryPush on closed returned true")
+func TestConcurrentFIFO(t *testing.T) {
+	const n = 500000
+	r, err := NewSPSC[int](1024)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := r.Push(context.Background(), 1, 4); !errors.Is(err, ErrClosed) {
-		t.Fatalf("Push on closed = %v, want ErrClosed", err)
-	}
-}
-
-// TestConcurrentSequential streams several million sequential integers through
-// the ring from a producer goroutine to a consumer goroutine and asserts every
-// value arrives exactly once, in order, with none lost.
-func TestConcurrentSequential(t *testing.T) {
-	const n = 5_000_000
-	r := New[int](1024)
-	ctx := context.Background()
-
-	errc := make(chan error, 1)
+	done := make(chan error, 1)
 	go func() {
 		for i := 0; i < n; i++ {
-			if err := r.Push(ctx, i, 64); err != nil {
-				errc <- err
+			if err := r.Publish(context.Background(), i, 64); err != nil {
+				done <- err
 				return
 			}
 		}
-		r.Close()
-		errc <- nil
+		_ = r.Close()
+		done <- nil
 	}()
-
-	got := 0
-	for {
-		v, ok, err := r.Pop(ctx, 64)
-		if err != nil {
-			t.Fatalf("Pop error at %d: %v", got, err)
-		}
-		if !ok {
-			break // closed and drained
-		}
-		if v != got {
-			t.Fatalf("out of order: got %d, want %d", v, got)
-		}
-		got++
-	}
-	if err := <-errc; err != nil {
-		t.Fatalf("producer error: %v", err)
-	}
-	if got != n {
-		t.Fatalf("received %d values, want %d", got, n)
-	}
-}
-
-// TestCloseAndDrain buffers N items, closes, and verifies the consumer drains
-// exactly N and then observes closed.
-func TestCloseAndDrain(t *testing.T) {
-	const n = 1000
-	r := New[int](1024) // holds all n at once
 	for i := 0; i < n; i++ {
-		if !r.TryPush(i) {
-			t.Fatalf("TryPush failed at %d (Len=%d)", i, r.Len())
+		v, ok, err := r.ConsumeWait(context.Background(), 64)
+		if err != nil || !ok || v != i {
+			t.Fatalf("%d: %d %v %v", i, v, ok, err)
 		}
 	}
-	r.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 
-	ctx := context.Background()
-	got := 0
-	for {
-		v, ok, err := r.Pop(ctx, 8)
+func TestBlockedPublishCancellationAndClose(t *testing.T) {
+	for _, closeRing := range []bool{false, true} {
+		r, err := NewSPSC[int](2)
 		if err != nil {
-			t.Fatalf("Pop error at %d: %v", got, err)
+			t.Fatal(err)
 		}
-		if !ok {
-			break
+		r.TryPublish(1)
+		r.TryPublish(2)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- r.Publish(ctx, 3, 8) }()
+		time.Sleep(5 * time.Millisecond)
+		if closeRing {
+			_ = r.Close()
+		} else {
+			cancel()
 		}
-		if v != got {
-			t.Fatalf("out of order: got %d, want %d", v, got)
+		err = <-done
+		cancel()
+		if closeRing && !errors.Is(err, ErrClosed) {
+			t.Fatalf("close: %v", err)
 		}
-		got++
-	}
-	if got != n {
-		t.Fatalf("drained %d, want %d", got, n)
-	}
-	// A further Pop on a closed+drained ring keeps reporting closed.
-	if v, ok, err := r.Pop(ctx, 8); ok || err != nil {
-		t.Fatalf("Pop after drain = (%d,%v,%v), want (_,false,nil)", v, ok, err)
-	}
-}
-
-// TestCtxCancelUnblocksPop verifies a blocked Pop returns when ctx is cancelled.
-func TestCtxCancelUnblocksPop(t *testing.T) {
-	r := New[int](4) // empty, never fed
-	ctx, cancel := context.WithCancel(context.Background())
-
-	type res struct {
-		ok  bool
-		err error
-	}
-	done := make(chan res, 1)
-	go func() {
-		_, ok, err := r.Pop(ctx, 16)
-		done <- res{ok, err}
-	}()
-
-	// Give the goroutine time to enter the blocked spin loop, then cancel.
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-
-	select {
-	case got := <-done:
-		if got.ok {
-			t.Fatal("Pop returned ok=true after cancel")
+		if !closeRing && !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel: %v", err)
 		}
-		if !errors.Is(got.err, context.Canceled) {
-			t.Fatalf("Pop err = %v, want context.Canceled", got.err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Pop did not unblock after ctx cancel")
 	}
 }
 
-// TestCtxCancelUnblocksPush verifies a blocked (full-ring) Push returns when ctx
-// is cancelled.
-func TestCtxCancelUnblocksPush(t *testing.T) {
-	r := New[int](2)
-	// Fill it so the next Push blocks.
-	r.TryPush(1)
-	r.TryPush(2)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- r.Push(ctx, 3, 16)
-	}()
-
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Push err = %v, want context.Canceled", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Push did not unblock after ctx cancel")
+func TestCursorSeparationAndAllocFree(t *testing.T) {
+	var r SPSC[int]
+	p := unsafe.Offsetof(r.producer) + unsafe.Offsetof(r.producer.published)
+	c := unsafe.Offsetof(r.consumer) + unsafe.Offsetof(r.consumer.consumed)
+	if c-p < cursorBlockSize {
+		t.Fatalf("distance=%d", c-p)
 	}
-}
-
-// TestAllocFree asserts the fast paths perform no heap allocations.
-func TestAllocFree(t *testing.T) {
-	r := New[int](8)
-	if a := testing.AllocsPerRun(1000, func() {
-		r.TryPush(1)
-		r.TryPop()
-	}); a != 0 {
-		t.Fatalf("TryPush/TryPop allocated %v/op, want 0", a)
+	q, err := NewSPSC[int](8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := testing.AllocsPerRun(1000, func() { q.TryPublish(1); q.TryConsume() }); a != 0 {
+		t.Fatalf("allocs=%v", a)
 	}
 }

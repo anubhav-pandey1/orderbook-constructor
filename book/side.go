@@ -14,7 +14,7 @@ type sideBook struct {
 	levels     map[Price]level
 	prices     priceHeap
 	nextGen    uint64
-	staleCount int // metric: levels removed since last rebuild
+	staleCount int // retained entries that do not match an active generation
 }
 
 func newSideBook(side Side, capHint int) sideBook {
@@ -65,6 +65,9 @@ func (s *sideBook) best() (Price, Quantity, bool) {
 			return e.price, lv.quantity, true
 		}
 		s.prices.pop()
+		if s.staleCount > 0 {
+			s.staleCount--
+		}
 	}
 }
 

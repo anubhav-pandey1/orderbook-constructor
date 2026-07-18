@@ -6,11 +6,35 @@ import (
 	"time"
 )
 
+var sinkRingInt int
+
+func BenchmarkSPSCTryRoundTrip(b *testing.B) {
+	r, err := NewSPSC[int](1024)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !r.TryPublish(i) {
+			b.Fatal("unexpected full ring")
+		}
+		var ok bool
+		sinkRingInt, ok = r.TryConsume()
+		if !ok {
+			b.Fatal("unexpected empty ring")
+		}
+	}
+}
+
 // BenchmarkSPSC measures end-to-end throughput: a producer goroutine feeds
 // b.N sequential integers while the consumer drains them inside the benchmark
 // loop. It reports achieved ops/second.
 func BenchmarkSPSC(b *testing.B) {
-	r := New[int](1 << 12) // 4096 slots
+	r, err := NewSPSC[int](1 << 12) // 4096 slots
+	if err != nil {
+		b.Fatal(err)
+	}
 	ctx := context.Background()
 	n := b.N
 
@@ -18,7 +42,7 @@ func BenchmarkSPSC(b *testing.B) {
 	go func() {
 		defer close(done)
 		for i := 0; i < n; i++ {
-			if err := r.Push(ctx, i, 128); err != nil {
+			if err := r.Publish(ctx, i, 128); err != nil {
 				return
 			}
 		}
@@ -27,7 +51,7 @@ func BenchmarkSPSC(b *testing.B) {
 	b.ResetTimer()
 	t0 := time.Now()
 	for i := 0; i < n; i++ {
-		v, ok, err := r.Pop(ctx, 128)
+		v, ok, err := r.ConsumeWait(ctx, 128)
 		if !ok || err != nil {
 			b.Fatalf("Pop failed at %d: ok=%v err=%v", i, ok, err)
 		}

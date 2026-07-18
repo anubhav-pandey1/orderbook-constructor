@@ -29,7 +29,7 @@ race:
 
 # Format all Go sources in place.
 fmt:
-	gofmt -w .
+	go fmt ./...
 
 # Static analysis.
 vet:
