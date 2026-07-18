@@ -19,15 +19,15 @@ const (
 
 // Config controls synthetic CSV generation.
 type Config struct {
-	Exchange     string
-	Symbol       string
-	StartTS      int64
-	TSStep       int64
-	Incrementals int64
+	Exchange      string
+	Symbol        string
+	StartTS       int64
+	TSStep        int64
+	Incrementals  int64
 	LevelsPerSide int
-	MaxLevels    int
+	MaxLevels     int
 	SnapshotEvery int64 // 0 = initial snapshot only
-	Seed         int64
+	Seed          int64
 }
 
 // DefaultConfig matches btc_orderbook_updates.csv conventions.
@@ -46,18 +46,19 @@ func DefaultConfig() Config {
 }
 
 type simBook struct {
-	bids map[int64]int64
-	asks map[int64]int64
-	rng  *rand.Rand
-	max  int
+	bids, asks         map[int64]int64
+	bidTicks, askTicks []int64
+	bidIndex, askIndex map[int64]int
+	rng                *rand.Rand
+	max                int
 }
 
 func newSimBook(levelsPerSide, maxLevels int, rng *rand.Rand) *simBook {
 	b := &simBook{
-		bids: make(map[int64]int64, levelsPerSide),
-		asks: make(map[int64]int64, levelsPerSide),
-		rng:  rng,
-		max:  maxLevels,
+		bids: make(map[int64]int64, maxLevels), asks: make(map[int64]int64, maxLevels),
+		bidTicks: make([]int64, 0, maxLevels), askTicks: make([]int64, 0, maxLevels),
+		bidIndex: make(map[int64]int, maxLevels), askIndex: make(map[int64]int, maxLevels),
+		rng: rng, max: maxLevels,
 	}
 	// Uncrossed seed book around 100000, matching the assignment fixture band.
 	bidTicks := []int64{9999999, 9999886, 9999732, 9999254, 9999485, 9998959, 9998207, 9998276, 9998957, 9998608}
@@ -70,14 +71,14 @@ func newSimBook(levelsPerSide, maxLevels int, rng *rand.Rand) *simBook {
 		n = len(bidTicks)
 	}
 	for i := 0; i < n; i++ {
-		b.bids[bidTicks[i]] = bidQty[i]
-		b.asks[askTicks[i]] = askQty[i]
+		b.set("bid", bidTicks[i], bidQty[i])
+		b.set("ask", askTicks[i], askQty[i])
 	}
 	return b
 }
 
 func (b *simBook) bestBid() (ticks int64, ok bool) {
-	for p := range b.bids {
+	for _, p := range b.bidTicks {
 		if !ok || p > ticks {
 			ticks, ok = p, true
 		}
@@ -86,7 +87,7 @@ func (b *simBook) bestBid() (ticks int64, ok bool) {
 }
 
 func (b *simBook) bestAsk() (ticks int64, ok bool) {
-	for p := range b.asks {
+	for _, p := range b.askTicks {
 		if !ok || p < ticks {
 			ticks, ok = p, true
 		}
@@ -101,19 +102,26 @@ func (b *simBook) sideMap(side string) map[int64]int64 {
 	return b.bids
 }
 
+func (b *simBook) sideTicks(side string) []int64 {
+	if side == "ask" {
+		return b.askTicks
+	}
+	return b.bidTicks
+}
+
+func (b *simBook) sideIndex(side string) map[int64]int {
+	if side == "ask" {
+		return b.askIndex
+	}
+	return b.bidIndex
+}
+
 func (b *simBook) randomLevel(side string) (ticks int64, ok bool) {
-	m := b.sideMap(side)
-	if len(m) == 0 {
+	prices := b.sideTicks(side)
+	if len(prices) == 0 {
 		return 0, false
 	}
-	i := b.rng.Intn(len(m))
-	for p := range m {
-		if i == 0 {
-			return p, true
-		}
-		i--
-	}
-	return 0, false
+	return prices[b.rng.Intn(len(prices))], true
 }
 
 func (b *simBook) nonBestLevel(side string) (ticks int64, ok bool) {
@@ -141,9 +149,37 @@ func (b *simBook) nonBestLevel(side string) (ticks int64, ok bool) {
 
 func (b *simBook) set(side string, ticks, qty int64) {
 	m := b.sideMap(side)
+	index := b.sideIndex(side)
 	if qty == 0 {
+		at, exists := index[ticks]
+		if !exists {
+			return
+		}
+		prices := b.sideTicks(side)
+		last := len(prices) - 1
+		moved := prices[last]
+		prices[at] = moved
+		prices = prices[:last]
+		delete(index, ticks)
+		if moved != ticks {
+			index[moved] = at
+		}
 		delete(m, ticks)
+		if side == "ask" {
+			b.askTicks = prices
+		} else {
+			b.bidTicks = prices
+		}
 		return
+	}
+	if _, exists := m[ticks]; !exists {
+		if side == "ask" {
+			index[ticks] = len(b.askTicks)
+			b.askTicks = append(b.askTicks, ticks)
+		} else {
+			index[ticks] = len(b.bidTicks)
+			b.bidTicks = append(b.bidTicks, ticks)
+		}
 	}
 	m[ticks] = qty
 }
@@ -187,7 +223,7 @@ func (b *simBook) evictFarthestNonBest(side string) {
 		}
 	}
 	if found {
-		delete(m, victim)
+		b.set(side, victim, 0)
 	}
 }
 
@@ -384,20 +420,8 @@ func writeIncremental(w *bufio.Writer, cfg Config, ts int64, side string, ticks,
 
 // Write streams a synthetic order-book CSV to w.
 func Write(w io.Writer, cfg Config) error {
-	if cfg.Incrementals < 0 {
-		return fmt.Errorf("incrementals must be >= 0")
-	}
-	if cfg.TSStep <= 0 {
-		return fmt.Errorf("ts-step must be > 0")
-	}
-	if cfg.LevelsPerSide <= 0 {
-		return fmt.Errorf("levels-per-side must be > 0")
-	}
-	if cfg.MaxLevels < cfg.LevelsPerSide {
-		return fmt.Errorf("max-levels must be >= levels-per-side")
-	}
-	if cfg.Exchange == "" || cfg.Symbol == "" {
-		return fmt.Errorf("exchange and symbol are required")
+	if err := validateConfig(cfg); err != nil {
+		return err
 	}
 
 	bw := bufio.NewWriterSize(w, 1<<20)

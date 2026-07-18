@@ -1,89 +1,148 @@
 package book_test
 
 import (
+	"fmt"
+	"runtime"
 	"testing"
-	"time"
 
 	"orderbook/book"
 )
 
-// Sinks defeat dead-code elimination of benchmarked results.
-var (
-	sinkPrice book.Price
-	sinkQty   book.Quantity
-	sinkEvent book.BookEvent
-)
+var sinkResult book.DeltaResult
+var sinkPrice book.Price
+var sinkQty book.Quantity
 
-func benchInitBook(b *testing.B, levels int) *book.Book {
+func benchmarkBook(b *testing.B) *book.Book {
 	b.Helper()
-	bk := book.New("x", "SYM", book.Config{CrossedPolicy: book.PolicyOff, LevelHint: levels + 16})
-	bids := make([]book.Level, 0, levels)
-	asks := make([]book.Level, 0, levels)
-	for i := 0; i < levels; i++ {
-		// Bids well below asks so the book is never crossed.
-		bids = append(bids, book.Level{Price: book.Price(500000 - int64(i)*10), Qty: book.Quantity(10000 + int64(i))})
-		asks = append(asks, book.Level{Price: book.Price(600000 + int64(i)*10), Qty: book.Quantity(10000 + int64(i))})
+	bk := book.New(512)
+	bids := make([]book.Level, 256)
+	asks := make([]book.Level, 256)
+	for i := range bids {
+		bids[i] = book.Level{Price: book.Price(500000 - int64(i)*10), Qty: 10000}
+		asks[i] = book.Level{Price: book.Price(600000 + int64(i)*10), Qty: 10000}
 	}
-	if _, err := bk.ApplySnapshot(book.Snapshot{Bids: bids, Asks: asks}, time.Now()); err != nil {
-		b.Fatalf("snapshot: %v", err)
+	if _, err := bk.ApplySnapshot(&book.Snapshot{Bids: bids, Asks: asks}); err != nil {
+		b.Fatal(err)
 	}
 	return bk
 }
 
-// BenchmarkApplyUpdateExisting replaces the quantity of an already-present level.
-// This is the hot path and should be ~0 allocs/op.
 func BenchmarkApplyUpdateExisting(b *testing.B) {
-	bk := benchInitBook(b, 256)
-	price := book.Price(500000) // the best bid, always present
-	now := time.Now()
+	bk := benchmarkBook(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sinkEvent, _ = bk.ApplyIncremental(book.Incremental{
-			Side: book.Bid, Price: price, Qty: book.Quantity(10000 + int64(i&0xffff)),
-		}, now)
+		sinkResult, _ = bk.ApplyDelta(book.Bid, 500000, book.Quantity(10000+int64(i&65535)))
 	}
 }
-
-// BenchmarkApplyNewLevel inserts a fresh, unique bid price each iteration.
 func BenchmarkApplyNewLevel(b *testing.B) {
-	bk := benchInitBook(b, 256)
-	now := time.Now()
+	bk := benchmarkBook(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Prices below the starting bid range so they never cross asks and are unique.
-		sinkEvent, _ = bk.ApplyIncremental(book.Incremental{
-			Side: book.Bid, Price: book.Price(400000 - int64(i)), Qty: book.Quantity(5000),
-		}, now)
+		// Increasing asks stay positive and above the best bid for any practical
+		// benchmark duration. The old decreasing-bid version eventually measured
+		// ErrInvalidPrice instead of insertion.
+		sinkResult, _ = bk.ApplyDelta(book.Ask, book.Price(700000+int64(i)), 5000)
 	}
 }
-
-// BenchmarkApplyDelete exercises the delete path of ApplyIncremental (Qty==0).
-func BenchmarkApplyDelete(b *testing.B) {
-	bk := benchInitBook(b, 256)
-	price := book.Price(499000) // a non-best, present bid
-	now := time.Now()
+func BenchmarkApplyAbsentDelete(b *testing.B) {
+	bk := benchmarkBook(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// First iteration removes the level; subsequent ones are idempotent no-ops
-		// (still a valid, version-bumping delete path).
-		sinkEvent, _ = bk.ApplyIncremental(book.Incremental{Side: book.Bid, Price: price, Qty: 0}, now)
+		sinkResult, _ = bk.ApplyDelta(book.Bid, 300000, 0)
 	}
 }
 
+func BenchmarkApplyActiveDeleteCycle(b *testing.B) {
+	bk := benchmarkBook(b)
+	const px = book.Price(700000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = bk.ApplyDelta(book.Ask, px, 5000)
+		sinkResult, _ = bk.ApplyDelta(book.Ask, px, 0)
+	}
+}
+
+func BenchmarkApplyBestDeleteCycle(b *testing.B) {
+	bk := benchmarkBook(b)
+	const px = book.Price(500000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sinkResult, _ = bk.ApplyDelta(book.Bid, px, 0)
+		_, _ = bk.ApplyDelta(book.Bid, px, 10000)
+	}
+}
+
+func BenchmarkDeleteReinsertGeneration(b *testing.B) {
+	bk := benchmarkBook(b)
+	const px = book.Price(499000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = bk.ApplyDelta(book.Bid, px, 0)
+		sinkResult, _ = bk.ApplyDelta(book.Bid, px, 10000)
+	}
+}
+
+// Repeated churn drives lazy stale entries through the rebuild threshold.
+func BenchmarkHeapRebuildChurn(b *testing.B) {
+	bk := benchmarkBook(b)
+	const px = book.Price(400000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = bk.ApplyDelta(book.Bid, px, 5000)
+		sinkResult, _ = bk.ApplyDelta(book.Bid, px, 0)
+	}
+}
+
+func BenchmarkBBOSnapshotParallel(b *testing.B) {
+	bk := benchmarkBook(b)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		var result book.BBO
+		for pb.Next() {
+			result = bk.BBOSnapshot()
+		}
+		runtime.KeepAlive(result)
+	})
+}
+
+func BenchmarkApplySnapshot(b *testing.B) {
+	for _, levels := range []int{10, 100, 1_000, 10_000} {
+		b.Run(fmt.Sprintf("levels_per_side_%d", levels), func(b *testing.B) {
+			snapshot := makeBenchmarkSnapshot(levels)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bk := book.New(levels)
+				_, _ = bk.ApplySnapshot(snapshot)
+			}
+		})
+	}
+}
+
+func makeBenchmarkSnapshot(levels int) *book.Snapshot {
+	bids := make([]book.Level, levels)
+	asks := make([]book.Level, levels)
+	for i := range levels {
+		bids[i] = book.Level{Price: book.Price(500000 - i), Qty: 10000}
+		asks[i] = book.Level{Price: book.Price(600000 + i), Qty: 10000}
+	}
+	return &book.Snapshot{Bids: bids, Asks: asks}
+}
 func BenchmarkParsePrice(b *testing.B) {
 	b.ReportAllocs()
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sinkPrice, _ = book.ParsePrice("99993.99")
 	}
 }
-
 func BenchmarkParseQuantity(b *testing.B) {
 	b.ReportAllocs()
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sinkQty, _ = book.ParseQuantity("2.1802")
 	}

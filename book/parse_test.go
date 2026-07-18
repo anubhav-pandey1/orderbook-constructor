@@ -2,6 +2,7 @@ package book_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"orderbook/book"
@@ -34,6 +35,33 @@ func TestParsePrice(t *testing.T) {
 		if tc.wantErr == nil && got != tc.want {
 			t.Errorf("ParsePrice(%q) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestFixedPointBoundariesAndAppendText(t *testing.T) {
+	p, err := book.ParsePrice("92233720368547758.07")
+	if err != nil || int64(p) != math.MaxInt64 {
+		t.Fatalf("max price = %d, %v", p, err)
+	}
+	if _, err = book.ParsePrice("92233720368547758.08"); !errors.Is(err, book.ErrOverflow) {
+		t.Fatalf("overflow = %v", err)
+	}
+	if _, err = book.ParsePrice(".1"); !errors.Is(err, book.ErrSyntax) {
+		t.Fatalf("leading dot = %v", err)
+	}
+	if _, err = book.ParsePrice("1."); !errors.Is(err, book.ErrSyntax) {
+		t.Fatalf("trailing dot = %v", err)
+	}
+	var buf [64]byte
+	if got := string(book.Price(9999399).AppendText(buf[:0])); got != "99993.99" {
+		t.Fatalf("price text = %q", got)
+	}
+	if got := string(book.Quantity(5270).AppendText(buf[:0])); got != "0.5270" {
+		t.Fatalf("qty text = %q", got)
+	}
+	var n int
+	if allocs := testing.AllocsPerRun(1000, func() { var local [32]byte; n = len(book.Price(9999399).AppendText(local[:0])) }); allocs != 0 || n == 0 {
+		t.Fatalf("allocs/len = %v/%d", allocs, n)
 	}
 }
 

@@ -18,8 +18,9 @@ const (
 	// subBits controls the number of linear sub-buckets per power-of-two
 	// octave: subCount = 2^subBits. More sub-buckets -> smaller relative
 	// error per bucket (~1/subCount) at the cost of more memory.
-	subBits  = 6
-	subCount = 1 << subBits // 64 sub-buckets per octave (~1.5% relative width)
+	subBits     = 6
+	subCount    = 1 << subBits // 64 sub-buckets per octave (~1.5% relative width)
+	bucketCount = (64 - subBits) * subCount
 )
 
 // bucketIndex maps a nanosecond value to its bucket index.
@@ -65,7 +66,7 @@ func bucketRep(i int) int64 {
 // Histogram is a log-linear bucketed latency histogram over int64 nanoseconds.
 // It is not safe for concurrent use.
 type Histogram struct {
-	buckets []uint64
+	buckets [bucketCount]uint64
 	count   uint64
 	min     int64
 	max     int64
@@ -75,11 +76,12 @@ type Histogram struct {
 // int64 nanosecond range.
 func NewHistogram() *Histogram {
 	return &Histogram{
-		buckets: make([]uint64, bucketIndex(math.MaxInt64)+1),
-		min:     math.MaxInt64,
-		max:     math.MinInt64,
+		min: math.MaxInt64,
+		max: math.MinInt64,
 	}
 }
+
+func (h *Histogram) P(q float64) int64 { return h.Percentile(q) }
 
 // Record adds a single nanosecond observation. It performs no heap allocation.
 func (h *Histogram) Record(ns int64) {
@@ -166,6 +168,8 @@ func (h *Histogram) Summary(name string) string {
 		formatNS(h.Max()),
 	)
 }
+
+func (h *Histogram) Line(name string) string { return h.Summary(name) }
 
 // formatNS auto-formats a nanosecond value with an appropriate unit
 // (ns / µs / ms / s) at 2-3 significant figures.
