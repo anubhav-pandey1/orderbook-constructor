@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// TestPercentilesUniformRange records the integers 1..10000 ns and asserts
-// each percentile is within 2% of the analytic (nearest-rank) value. For a
-// contiguous 1..N data set, the nearest-rank value at quantile q is ~q*N.
 func TestPercentilesUniformRange(t *testing.T) {
 	h := NewHistogram()
 	const N = 10000
@@ -38,8 +35,6 @@ func TestPercentilesUniformRange(t *testing.T) {
 	}
 }
 
-// TestUniformConstant records a single constant value many times and asserts
-// every percentile resolves to that value.
 func TestUniformConstant(t *testing.T) {
 	h := NewHistogram()
 	const val = int64(500)
@@ -56,7 +51,6 @@ func TestUniformConstant(t *testing.T) {
 	}
 }
 
-// TestEmpty verifies the zero-observation behavior.
 func TestEmpty(t *testing.T) {
 	h := NewHistogram()
 	if got := h.Count(); got != 0 {
@@ -76,7 +70,6 @@ func TestEmpty(t *testing.T) {
 	}
 }
 
-// TestRate checks the throughput helper, including the zero-duration guard.
 func TestRate(t *testing.T) {
 	if got := Rate(1_000_000, time.Second); got != 1e6 {
 		t.Errorf("Rate(1e6, 1s) = %v, want 1e6", got)
@@ -89,11 +82,10 @@ func TestRate(t *testing.T) {
 	}
 }
 
-// TestSummary verifies the summary line contains the required substrings.
 func TestSummary(t *testing.T) {
 	h := NewHistogram()
 	for i := int64(1); i <= 1000; i++ {
-		h.Record(i * 1000) // microsecond-scale values
+		h.Record(i * 1000)
 	}
 	s := h.Summary("latency")
 	for _, sub := range []string{"latency:", "count=1000", "p50=", "p90=", "p95=", "p99=", "p99.9=", "max="} {
@@ -103,10 +95,9 @@ func TestSummary(t *testing.T) {
 	}
 }
 
-// TestRecordDuration verifies RecordDuration records d.Nanoseconds().
 func TestRecordDuration(t *testing.T) {
 	h := NewHistogram()
-	h.RecordDuration(2 * time.Microsecond) // 2000 ns
+	h.RecordDuration(2 * time.Microsecond)
 	if h.Count() != 1 {
 		t.Fatalf("Count() = %d, want 1", h.Count())
 	}
@@ -118,7 +109,6 @@ func TestRecordDuration(t *testing.T) {
 	}
 }
 
-// TestRecordAllocationFree asserts Record performs zero heap allocations.
 func TestRecordAllocationFree(t *testing.T) {
 	h := NewHistogram()
 	allocs := testing.AllocsPerRun(1000, func() {

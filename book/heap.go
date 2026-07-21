@@ -1,16 +1,10 @@
 package book
 
-// heapEntry indexes a price into a side's heap. generation disambiguates a
-// delete-then-reinsert at the same price so a stale entry can never be
-// mistaken for the current level.
 type heapEntry struct {
 	price      Price
 	generation uint64
 }
 
-// priceHeap is a binary heap of prices. max=true -> max-heap (bids),
-// max=false -> min-heap (asks). It holds every live price plus, transiently,
-// stale entries cleaned lazily at the root or by rebuild.
 type priceHeap struct {
 	data []heapEntry
 	max  bool

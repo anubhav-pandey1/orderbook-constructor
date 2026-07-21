@@ -27,11 +27,8 @@ func BenchmarkSPSCTryRoundTrip(b *testing.B) {
 	}
 }
 
-// BenchmarkSPSC measures end-to-end throughput: a producer goroutine feeds
-// b.N sequential integers while the consumer drains them inside the benchmark
-// loop. It reports achieved ops/second.
 func BenchmarkSPSC(b *testing.B) {
-	r, err := NewSPSC[int](1 << 12) // 4096 slots
+	r, err := NewSPSC[int](1 << 12)
 	if err != nil {
 		b.Fatal(err)
 	}

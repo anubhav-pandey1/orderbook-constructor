@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"orderbook/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
 )
 
 func TestParsePrice(t *testing.T) {
@@ -18,7 +18,7 @@ func TestParsePrice(t *testing.T) {
 		{"100", book.Price(10000), nil},
 		{"0.01", book.Price(1), nil},
 		{"0.0", book.Price(0), nil},
-		{"100.123", 0, book.ErrPrecision}, // >2 dp
+		{"100.123", 0, book.ErrPrecision},
 		{"-1", 0, book.ErrSyntax},
 		{"1e3", 0, book.ErrSyntax},
 		{"abc", 0, book.ErrSyntax},
@@ -74,7 +74,7 @@ func TestParseQuantity(t *testing.T) {
 		{"1.5", book.Quantity(15000), nil},
 		{"0.527", book.Quantity(5270), nil},
 		{"0.0", book.Quantity(0), nil},
-		{"1.23456", 0, book.ErrPrecision}, // >4 dp
+		{"1.23456", 0, book.ErrPrecision},
 		{"-1", 0, book.ErrSyntax},
 		{"1e3", 0, book.ErrSyntax},
 		{"abc", 0, book.ErrSyntax},
@@ -129,7 +129,6 @@ func TestQuantityString(t *testing.T) {
 	}
 }
 
-// TestParseRoundTrip confirms parse then String is stable for representative inputs.
 func TestParseRoundTrip(t *testing.T) {
 	p, err := book.ParsePrice("99993.99")
 	if err != nil {

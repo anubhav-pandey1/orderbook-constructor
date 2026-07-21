@@ -11,13 +11,11 @@ import (
 const (
 	header = "type,exchange,symbol,timestamp,side,bids,asks,price,size\n"
 
-	// midTick is 100000.00; bandTicks keeps prices in a fixture-like range.
 	midTick   = int64(10000000)
-	bandTicks = int64(100000) // +/- 1000.00
-	minSpread = int64(2)      // 0.02 minimum bid/ask separation
+	bandTicks = int64(100000)
+	minSpread = int64(2)
 )
 
-// Config controls synthetic CSV generation.
 type Config struct {
 	Exchange      string
 	Symbol        string
@@ -26,11 +24,10 @@ type Config struct {
 	Incrementals  int64
 	LevelsPerSide int
 	MaxLevels     int
-	SnapshotEvery int64 // 0 = initial snapshot only
+	SnapshotEvery int64
 	Seed          int64
 }
 
-// DefaultConfig matches btc_orderbook_updates.csv conventions.
 func DefaultConfig() Config {
 	return Config{
 		Exchange:      "binance",
@@ -60,7 +57,7 @@ func newSimBook(levelsPerSide, maxLevels int, rng *rand.Rand) *simBook {
 		bidIndex: make(map[int64]int, maxLevels), askIndex: make(map[int64]int, maxLevels),
 		rng: rng, max: maxLevels,
 	}
-	// Uncrossed seed book around 100000, matching the assignment fixture band.
+
 	bidTicks := []int64{9999999, 9999886, 9999732, 9999254, 9999485, 9998959, 9998207, 9998276, 9998957, 9998608}
 	askTicks := []int64{10000001, 10000227, 10000285, 10000495, 10000921, 10000798, 10000759, 10001388, 10000984, 10001618}
 	bidQty := []int64{5270, 31404, 20343, 16814, 2099, 41407, 41942, 21042, 22734, 29537}
@@ -131,7 +128,7 @@ func (b *simBook) nonBestLevel(side string) (ticks int64, ok bool) {
 	if len(m) <= 1 {
 		return b.randomLevel(side)
 	}
-	for range len(m) * 4 {
+	for i := 0; i < len(m)*4; i++ {
 		p, ok := b.randomLevel(side)
 		if !ok {
 			return 0, false
@@ -185,7 +182,7 @@ func (b *simBook) set(side string, ticks, qty int64) {
 }
 
 func (b *simBook) randomQty() int64 {
-	// 0.0001 .. 5.0000 in 1e-4 units, biased toward small sizes like the fixture.
+
 	base := int64(b.rng.Intn(50000)) + 1
 	if b.rng.Intn(4) == 0 {
 		base = int64(b.rng.Intn(500000)) + 1000
@@ -234,7 +231,7 @@ func (b *simBook) randomNewBidTick(bestBid, bestAsk int64) (int64, bool) {
 		return 0, false
 	}
 	span := hi - lo + 1
-	for range 32 {
+	for i := 0; i < 32; i++ {
 		t := lo + b.rng.Int63n(span)
 		if _, exists := b.bids[t]; exists {
 			continue
@@ -254,7 +251,7 @@ func (b *simBook) randomNewAskTick(bestBid, bestAsk int64) (int64, bool) {
 		return 0, false
 	}
 	span := hi - lo + 1
-	for range 32 {
+	for i := 0; i < 32; i++ {
 		t := lo + b.rng.Int63n(span)
 		if _, exists := b.asks[t]; exists {
 			continue
@@ -283,7 +280,7 @@ func (b *simBook) nextDelta() (side string, ticks, qty int64) {
 
 	op := b.rng.Intn(100)
 	switch {
-	case op < 35: // replace quantity at existing level
+	case op < 35:
 		side = "bid"
 		if b.rng.Intn(2) == 1 {
 			side = "ask"
@@ -291,7 +288,7 @@ func (b *simBook) nextDelta() (side string, ticks, qty int64) {
 		ticks, _ = b.randomLevel(side)
 		qty = b.randomQty()
 		b.set(side, ticks, qty)
-	case op < 55: // delete non-best level (absent delete is allowed but rare)
+	case op < 55:
 		side = "bid"
 		if b.rng.Intn(2) == 1 {
 			side = "ask"
@@ -305,7 +302,7 @@ func (b *simBook) nextDelta() (side string, ticks, qty int64) {
 		ticks, _ = b.nonBestLevel(side)
 		qty = 0
 		b.set(side, ticks, 0)
-	case op < 80: // insert new level inside the bounded uncrossed band
+	case op < 80:
 		var ok bool
 		if b.rng.Intn(2) == 0 {
 			side = "bid"
@@ -330,7 +327,7 @@ func (b *simBook) nextDelta() (side string, ticks, qty int64) {
 			qty = b.randomQty()
 			b.set(side, ticks, qty)
 		}
-	default: // touch best bid or best ask
+	default:
 		if b.rng.Intn(2) == 0 {
 			side, ticks = "bid", bestBid
 		} else {
@@ -418,7 +415,6 @@ func writeIncremental(w *bufio.Writer, cfg Config, ts int64, side string, ticks,
 	return err
 }
 
-// Write streams a synthetic order-book CSV to w.
 func Write(w io.Writer, cfg Config) error {
 	if err := validateConfig(cfg); err != nil {
 		return err

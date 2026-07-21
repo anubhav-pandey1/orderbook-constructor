@@ -10,16 +10,15 @@ import (
 	"runtime"
 	"time"
 
-	"orderbook/book"
-	"orderbook/feed"
-	"orderbook/feed/gencsv"
-	benchmetrics "orderbook/internal/bench"
-	obclock "orderbook/internal/clock"
-	"orderbook/internal/logx"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
-	"orderbook/internal/strategy"
-	"orderbook/internal/syncx"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed/gencsv"
+	benchmetrics "github.com/anubhav-pandey1/orderbook-constructor/internal/bench"
+	obclock "github.com/anubhav-pandey1/orderbook-constructor/internal/clock"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/logx"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/strategy"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 type measurement struct {
@@ -92,7 +91,7 @@ func runSuite(cfg config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.fixture, err = replayFixture(data, stream, cfg, feed.Fast, 1, cfg.fixtureIters, true)
+	s.fixture, err = replayFixture(data, stream, cfg, replay.Fast, 1, cfg.fixtureIters, true)
 	if err != nil {
 		return "", fmt.Errorf("W1: %w", err)
 	}
@@ -113,7 +112,7 @@ func runSuite(cfg config) (string, error) {
 
 	policyN := cfg.synthetic / 10
 	if policyN < 100_000 {
-		policyN = min(cfg.synthetic, 100_000)
+		policyN = minInt64(cfg.synthetic, 100_000)
 	}
 	gc.Incrementals, gc.SnapshotEvery = policyN, 0
 	s.policyStep, err = generatedPipeline("timestamp-step", gc, cfg, policyTimestamp)
@@ -128,11 +127,11 @@ func runSuite(cfg config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.backpressure, err = runBackpressure(20_000, min(cfg.eventRing, 256), cfg.spin)
+	s.backpressure, err = runBackpressure(20_000, minInt(cfg.eventRing, 256), cfg.spin)
 	if err != nil {
 		return "", err
 	}
-	s.paced, err = replayFixture(data, stream, cfg, feed.Paced, cfg.pacedSpeed, 1, false)
+	s.paced, err = replayFixture(data, stream, cfg, replay.Paced, cfg.pacedSpeed, 1, false)
 	if err != nil {
 		return "", fmt.Errorf("W7: %w", err)
 	}
@@ -212,12 +211,16 @@ func latency() *strategy.Latency {
 
 type observedStrategy struct {
 	inner strategy.Strategy
-	ring  *ring.SPSC[pipeline.Event]
+	ring  *ring.SPSC[replay.Event]
 	max   uint64
 }
 
-func (s *observedStrategy) OnEvent(e pipeline.Event, recv int64) {
-	s.max = max(s.max, uint64(s.ring.Len()+1))
+func (s *observedStrategy) OnEvent(e replay.Event, recv int64) {
+	depth := s.ring.Len()
+	if depth < s.ring.Cap() {
+		depth++
+	}
+	s.max = maxUint64(s.max, uint64(depth))
 	s.inner.OnEvent(e, recv)
 }
 
@@ -235,14 +238,14 @@ func (s *observedStrategy) Close() error {
 	return nil
 }
 
-func replayFixture(data []byte, stream feed.StreamID, cfg config, mode feed.ReplayMode, speed float64, iters int, withLogger bool) (measurement, error) {
+func replayFixture(data []byte, stream feed.StreamID, cfg config, mode replay.Mode, speed float64, iters int, withLogger bool) (measurement, error) {
 	lat := latency()
 	out := measurement{name: "W1 fixture timestamp-step pipeline", ingress: lat.IngressToRecv, apply: lat.ApplyToRecv, due: lat.DueToRecv, lateness: lat.SchedulerLateness}
 	before := mem()
 	start := time.Now()
-	for range iters {
+	for i := 0; i < iters; i++ {
 		clk := obclock.NewReal()
-		events, err := ring.NewSPSC[pipeline.Event](cfg.eventRing)
+		events, err := ring.NewSPSC[replay.Event](cfg.eventRing)
 		if err != nil {
 			return measurement{}, err
 		}
@@ -261,7 +264,13 @@ func replayFixture(data []byte, stream feed.StreamID, cfg config, mode feed.Repl
 		obs := &observedStrategy{inner: inner, ring: events}
 		done := make(chan error, 1)
 		go func() { done <- strategy.RunWithSpin(context.Background(), events, obs, clk, cfg.spin) }()
-		stats, replayErr := feed.Replay(context.Background(), feed.NewDecoder(bytes.NewReader(data)), book.New(512), syncx.NewTimestampPolicy(syncx.TimestampStep, 100), nil, events, feed.ReplayCfg{Mode: mode, Speed: speed, TSUnit: time.Millisecond, SpinIters: cfg.spin, Stream: stream}, clk)
+		stats, replayErr := replay.Run(context.Background(), feed.NewDecoder(bytes.NewReader(data)), book.New(512), replay.HandlerFunc(func(ctx context.Context, event replay.Event) error {
+			return events.Publish(ctx, event, cfg.spin)
+		}), replay.Options{
+			Mode: mode, Speed: speed, TimestampUnit: time.Millisecond, Stream: stream,
+			Policy: replay.NewTimestampPolicy(replay.TimestampStep, 100), Clock: clk,
+		})
+		_ = events.Close()
 		strategyErr := <-done
 		var loggerErr error
 		if loggerDone != nil {
@@ -271,13 +280,13 @@ func replayFixture(data []byte, stream feed.StreamID, cfg config, mode feed.Repl
 			out.log.Written += metrics.Written
 			out.log.Dropped += metrics.Dropped
 			out.log.WaitCount += metrics.WaitCount
-			out.log.MaxDepth = max(out.log.MaxDepth, metrics.MaxDepth)
+			out.log.MaxDepth = maxUint64(out.log.MaxDepth, metrics.MaxDepth)
 		}
 		if err = errors.Join(replayErr, strategyErr, loggerErr); err != nil {
 			return measurement{}, err
 		}
 		out.n += stats.Applied
-		out.eventDepth = max(out.eventDepth, obs.max)
+		out.eventDepth = maxUint64(out.eventDepth, obs.max)
 	}
 	after := mem()
 	out.duration = time.Since(start)
@@ -293,14 +302,14 @@ const (
 	policyUpdateID
 )
 
-func newPolicy(k policyKind, step int64) syncx.Policy {
+func newPolicy(k policyKind, step int64) replay.Policy {
 	if k == policyTimestamp {
-		return syncx.NewTimestampPolicy(syncx.TimestampStep, step)
+		return replay.NewTimestampPolicy(replay.TimestampStep, step)
 	}
 	if k == policyUpdateID {
-		return syncx.NewUpdateIDPolicy()
+		return replay.NewUpdateIDPolicy()
 	}
-	return syncx.NewArrivalOrderPolicy()
+	return replay.NewArrivalOrderPolicy()
 }
 
 func generatedPipeline(name string, gcfg gencsv.Config, cfg config, pk policyKind) (measurement, error) {
@@ -308,7 +317,7 @@ func generatedPipeline(name string, gcfg gencsv.Config, cfg config, pk policyKin
 	if err != nil {
 		return measurement{}, err
 	}
-	events, err := ring.NewSPSC[pipeline.Event](cfg.eventRing)
+	events, err := ring.NewSPSC[replay.Event](cfg.eventRing)
 	if err != nil {
 		return measurement{}, err
 	}
@@ -338,26 +347,26 @@ func generatedPipeline(name string, gcfg gencsv.Config, cfg config, pk policyKin
 			break
 		}
 		ingress := clk.NowNS()
-		cursor := syncx.Cursor{Timestamp: rec.TS, FirstUpdateID: rec.FirstUpdateID, FinalUpdateID: rec.FinalUpdateID, HasUpdateID: rec.HasUpdateID}
+		cursor := replay.Cursor{Timestamp: rec.TS, FirstUpdateID: rec.FirstUpdateID, FinalUpdateID: rec.FinalUpdateID, HasUpdateID: rec.HasUpdateID}
 		decision := policy.ClassifyUpdate(cursor)
 		if rec.Kind == feed.KindSnapshot {
 			decision = policy.ClassifySnapshot(cursor)
 		}
-		if decision.Action != syncx.Apply {
+		if decision.Action != replay.Apply {
 			producerErr = fmt.Errorf("%s record %d action=%d reason=%d", name, n, decision.Action, decision.Reason)
 			break
 		}
 		mutationStart := clk.NowNS()
 		var bbo book.BBO
-		var kind pipeline.EventKind
+		var kind replay.EventKind
 		if rec.Kind == feed.KindSnapshot {
 			bbo, err = bk.ApplySnapshot(rec.Snap)
-			kind = pipeline.SnapshotApplied
+			kind = replay.SnapshotApplied
 		} else {
 			var d book.DeltaResult
 			d, err = bk.ApplyDelta(rec.Side, rec.Px, rec.Qty)
 			bbo = d.BBO
-			kind = pipeline.IncrementalApplied
+			kind = replay.IncrementalApplied
 		}
 		if err != nil {
 			producerErr = fmt.Errorf("%s record %d: %w", name, n, err)
@@ -372,7 +381,7 @@ func generatedPipeline(name string, gcfg gencsv.Config, cfg config, pk policyKin
 			policy.AcceptUpdate(cursor)
 		}
 		notification++
-		ev := pipeline.Event{NotificationID: notification, Version: bbo.Version, SyncEpoch: epoch, Kind: kind, State: syncx.Synchronized, BidPx: bbo.BidPx, AskPx: bbo.AskPx, BidQty: bbo.BidQty, AskQty: bbo.AskQty, BidOK: bbo.BidOK, AskOK: bbo.AskOK, EventTS: rec.TS, IngressNS: ingress, ApplyNS: applyNS}
+		ev := replay.Event{NotificationID: notification, Version: bbo.Version, SyncEpoch: epoch, Kind: kind, State: replay.Synchronized, BidPx: bbo.BidPx, AskPx: bbo.AskPx, BidQty: bbo.BidQty, AskQty: bbo.AskQty, BidOK: bbo.BidOK, AskOK: bbo.AskOK, EventTS: rec.TS, IngressNS: ingress, ApplyNS: applyNS}
 		if err = events.Publish(ctx, ev, cfg.spin); err != nil {
 			producerErr = err
 			break
@@ -440,7 +449,7 @@ func runBackpressure(n, capacity, spin int) (backpressureResult, error) {
 				return backpressureResult{}, err
 			}
 		}
-		depth = max(depth, uint64(r.Len()))
+		depth = maxUint64(depth, uint64(r.Len()))
 	}
 	_ = r.Close()
 	if err = <-done; err != nil {

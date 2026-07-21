@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"orderbook/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
 )
 
 func px(v int64) book.Price                       { return book.Price(v * book.PriceScale) }
@@ -161,7 +161,7 @@ func TestQuoteCacheConcurrentReaders(t *testing.T) {
 	}
 	var done atomic.Bool
 	var wg sync.WaitGroup
-	for range 4 {
+	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

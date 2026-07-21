@@ -3,7 +3,7 @@ package logx
 import (
 	"context"
 	"errors"
-	"orderbook/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
 	"os"
 	"strings"
 	"testing"

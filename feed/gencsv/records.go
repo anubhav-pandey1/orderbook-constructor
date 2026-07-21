@@ -5,13 +5,10 @@ import (
 	"math/rand"
 	"sort"
 
-	"orderbook/book"
-	"orderbook/feed"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
 )
 
-// Generator emits a deterministic bounded-state workload one decoded record
-// at a time. High-volume benchmarks therefore do not retain a record slice or
-// charge CSV formatting and parsing to pipeline throughput.
 type Generator struct {
 	cfg    Config
 	stream feed.StreamID

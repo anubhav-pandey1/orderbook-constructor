@@ -9,14 +9,16 @@ import (
 	"strings"
 	"unicode"
 
-	"orderbook/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
 )
 
 type Kind uint8
 
 const (
 	KindSnapshot Kind = iota + 1
+
 	KindDelta
+
 	KindIncremental = KindDelta
 )
 

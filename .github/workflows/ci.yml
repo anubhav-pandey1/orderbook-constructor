@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - "1.20.x"
+          - "1.21.x"
+          - "1.22.x"
+          - "1.23.x"
+          - "1.24.x"
+          - "1.25.x"
+          - "1.26.x"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Format check
+        run: |
+          test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Staticcheck
+        if: matrix.go == '1.26.x'
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Vulnerability check
+        if: matrix.go == '1.26.x'
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Benchmark smoke
+        if: matrix.go == '1.26.x'
+        run: go test -run '^$' -bench . -benchmem -benchtime=1x ./...
+
+      - name: External import smoke
+        if: matrix.go == '1.26.x'
+        run: |
+          tmp="$(mktemp -d)"
+          cat > "$tmp/go.mod" <<'EOF'
+          module smoke
+
+          go 1.20
+
+          require github.com/anubhav-pandey1/orderbook-constructor v0.0.0
+
+          replace github.com/anubhav-pandey1/orderbook-constructor => ${{ github.workspace }}
+          EOF
+          cat > "$tmp/main.go" <<'EOF'
+          package smoke
+
+          import (
+          	"testing"
+
+          	"github.com/anubhav-pandey1/orderbook-constructor/book"
+          	"github.com/anubhav-pandey1/orderbook-constructor/feed"
+          	"github.com/anubhav-pandey1/orderbook-constructor/replay"
+          )
+
+          func TestImports(t *testing.T) {
+          	_ = book.New(8)
+          	if _, err := feed.NormalizeStreamID("binance", "BTC/USDT"); err != nil {
+          		t.Fatal(err)
+          	}
+          	_ = replay.NewArrivalOrderPolicy()
+          }
+          EOF
+          cd "$tmp"
+          go test ./...

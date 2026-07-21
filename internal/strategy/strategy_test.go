@@ -2,9 +2,9 @@ package strategy
 
 import (
 	"context"
-	"orderbook/internal/clock"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/clock"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 	"testing"
 )
 
@@ -13,13 +13,13 @@ type capture struct {
 	v    uint64
 }
 
-func (c *capture) OnEvent(e pipeline.Event, r int64) { c.recv = r; c.v = e.Version }
+func (c *capture) OnEvent(e replay.Event, r int64) { c.recv = r; c.v = e.Version }
 func TestReceiveBoundary(t *testing.T) {
-	q, err := ring.NewSPSC[pipeline.Event](2)
+	q, err := ring.NewSPSC[replay.Event](2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	q.TryPublish(pipeline.Event{Version: 7})
+	q.TryPublish(replay.Event{Version: 7})
 	_ = q.Close()
 	c := &capture{}
 	if err := Run(context.Background(), q, c, clock.NewSim(300)); err != nil {
