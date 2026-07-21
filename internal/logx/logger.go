@@ -5,11 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 	"io"
-	"orderbook/book"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
-	"orderbook/internal/syncx"
 	"os"
 	"runtime"
 	"strconv"
@@ -19,9 +18,9 @@ import (
 
 type Record struct {
 	NotificationID, Version, SyncEpoch         uint64
-	Kind                                       pipeline.EventKind
-	State                                      syncx.State
-	Reason                                     syncx.Reason
+	Kind                                       replay.EventKind
+	State                                      replay.State
+	Reason                                     replay.Reason
 	BidPx, AskPx                               book.Price
 	BidQty, AskQty                             book.Quantity
 	BidOK, AskOK                               bool

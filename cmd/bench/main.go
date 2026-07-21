@@ -1,5 +1,3 @@
-// Command bench executes the workloads defined by SPEC.md and writes the
-// canonical report. Measured paths never write logs to stdout.
 package main
 
 import (
@@ -45,7 +43,7 @@ func run() error {
 
 func parseFlags() config {
 	var c config
-	flag.StringVar(&c.csvPath, "csv", "btc_orderbook_updates.csv", "fixture CSV path")
+	flag.StringVar(&c.csvPath, "csv", "testdata/btc_orderbook_updates.csv", "fixture CSV path")
 	flag.StringVar(&c.exchange, "exchange", "binance", "exchange")
 	flag.StringVar(&c.symbol, "symbol", "BTCUSDT", "normalized symbol")
 	flag.StringVar(&c.cpuModel, "cpu-model", "", "CPU model override when OS discovery is unavailable")

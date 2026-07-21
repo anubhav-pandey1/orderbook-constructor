@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"orderbook/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
 )
 
 var sinkResult book.DeltaResult
@@ -40,9 +40,7 @@ func BenchmarkApplyNewLevel(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Increasing asks stay positive and above the best bid for any practical
-		// benchmark duration. The old decreasing-bid version eventually measured
-		// ErrInvalidPrice instead of insertion.
+
 		sinkResult, _ = bk.ApplyDelta(book.Ask, book.Price(700000+int64(i)), 5000)
 	}
 }
@@ -88,7 +86,6 @@ func BenchmarkDeleteReinsertGeneration(b *testing.B) {
 	}
 }
 
-// Repeated churn drives lazy stale entries through the rebuild threshold.
 func BenchmarkHeapRebuildChurn(b *testing.B) {
 	bk := benchmarkBook(b)
 	const px = book.Price(400000)
@@ -129,7 +126,7 @@ func BenchmarkApplySnapshot(b *testing.B) {
 func makeBenchmarkSnapshot(levels int) *book.Snapshot {
 	bids := make([]book.Level, levels)
 	asks := make([]book.Level, levels)
-	for i := range levels {
+	for i := 0; i < levels; i++ {
 		bids[i] = book.Level{Price: book.Price(500000 - i), Qty: 10000}
 		asks[i] = book.Level{Price: book.Price(600000 + i), Qty: 10000}
 	}

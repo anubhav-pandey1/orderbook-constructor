@@ -1,7 +1,7 @@
 package bench
 
 import (
-	"orderbook/internal/metrics"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/metrics"
 	"time"
 )
 

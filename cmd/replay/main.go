@@ -1,5 +1,3 @@
-// Command replay runs decode -> synchronize -> apply -> event ring -> strategy
-// -> log ring -> sink for one L2 stream.
 package main
 
 import (
@@ -15,14 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"orderbook/book"
-	"orderbook/feed"
-	obclock "orderbook/internal/clock"
-	"orderbook/internal/logx"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
-	"orderbook/internal/strategy"
-	"orderbook/internal/syncx"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
+	obclock "github.com/anubhav-pandey1/orderbook-constructor/internal/clock"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/logx"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/strategy"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 const defaultRingSize = 65536
@@ -95,7 +92,7 @@ func run(args []string) error {
 		}
 	}
 
-	events, err := ring.NewSPSC[pipeline.Event](cfg.eventRing)
+	events, err := ring.NewSPSC[replay.Event](cfg.eventRing)
 	if err != nil {
 		return fmt.Errorf("event ring: %w", err)
 	}
@@ -154,13 +151,14 @@ func run(args []string) error {
 	}()
 
 	started := time.Now()
-	stats, replayErr := feed.Replay(ctx, feed.NewDecoder(input), bk, policy, nil, events, feed.ReplayCfg{
-		Mode: mode, Speed: cfg.speed, TSUnit: unit, SpinIters: cfg.spin, Stream: stream,
-	}, clk)
+	stats, replayErr := replay.Run(ctx, feed.NewDecoder(input), bk, replay.HandlerFunc(func(ctx context.Context, event replay.Event) error {
+		return events.Publish(ctx, event, cfg.spin)
+	}), replay.Options{
+		Mode: mode, Speed: cfg.speed, TimestampUnit: unit, Stream: stream, Policy: policy, Clock: clk,
+	})
+	_ = events.Close()
 	elapsed := time.Since(started)
 
-	// Replay always closes the event ring. Strategy drains it and closes the log
-	// ring; logger then drains, flushes, and closes its sink.
 	strategyErr := <-strategyDone
 	loggerErr := <-loggerDone
 	if err := errors.Join(replayErr, strategyErr, loggerErr); err != nil {
@@ -174,7 +172,7 @@ func parseFlags(args []string) (config, error) {
 	var cfg config
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.StringVar(&cfg.csvPath, "csv", "./btc_orderbook_updates.csv", "input CSV path")
+	fs.StringVar(&cfg.csvPath, "csv", "./testdata/btc_orderbook_updates.csv", "input CSV path")
 	fs.StringVar(&cfg.exchange, "exchange", "binance", "expected exchange")
 	fs.StringVar(&cfg.symbol, "symbol", "BTCUSDT", "expected symbol")
 	fs.StringVar(&cfg.replayMode, "replay", "fast", "replay mode: fast|paced")
@@ -199,12 +197,12 @@ func parseFlags(args []string) (config, error) {
 	return cfg, nil
 }
 
-func parseReplayMode(value string) (feed.ReplayMode, error) {
+func parseReplayMode(value string) (replay.Mode, error) {
 	switch value {
 	case "fast":
-		return feed.Fast, nil
+		return replay.Fast, nil
 	case "paced":
-		return feed.Paced, nil
+		return replay.Paced, nil
 	default:
 		return 0, fmt.Errorf("invalid replay mode %q (want fast|paced)", value)
 	}
@@ -262,20 +260,20 @@ func decimalDigits(value int64) int {
 	return digits
 }
 
-func parseSyncPolicy(name, timestampMode string, stepDuration, unit time.Duration) (syncx.Policy, error) {
+func parseSyncPolicy(name, timestampMode string, stepDuration, unit time.Duration) (replay.Policy, error) {
 	if unit <= 0 {
 		return nil, fmt.Errorf("timestamp unit must be greater than zero")
 	}
 	switch name {
 	case "off":
-		return syncx.NewArrivalOrderPolicy(), nil
+		return replay.NewArrivalOrderPolicy(), nil
 	case "update-id":
-		return nil, fmt.Errorf("sync policy update-id requires update-ID fields, which the assignment CSV does not contain")
+		return nil, fmt.Errorf("sync policy update-id requires update-ID fields, which this CSV format does not contain")
 	case "timestamp":
-		var mode syncx.TimestampMode
+		var mode replay.TimestampMode
 		switch timestampMode {
 		case "step":
-			mode = syncx.TimestampStep
+			mode = replay.TimestampStep
 			if stepDuration <= 0 {
 				return nil, fmt.Errorf("timestamp step must be greater than zero")
 			}
@@ -283,11 +281,11 @@ func parseSyncPolicy(name, timestampMode string, stepDuration, unit time.Duratio
 				return nil, fmt.Errorf("timestamp step %s is not an exact multiple of source unit %s", stepDuration, unit)
 			}
 		case "monotonic":
-			mode = syncx.TimestampMonotonic
+			mode = replay.TimestampMonotonic
 		default:
 			return nil, fmt.Errorf("invalid timestamp mode %q (want step|monotonic)", timestampMode)
 		}
-		return syncx.NewTimestampPolicy(mode, int64(stepDuration/unit)), nil
+		return replay.NewTimestampPolicy(mode, int64(stepDuration/unit)), nil
 	default:
 		return nil, fmt.Errorf("invalid sync policy %q (want timestamp|update-id|off)", name)
 	}
@@ -304,7 +302,7 @@ func parseLogDelivery(value string) (logx.Delivery, error) {
 	}
 }
 
-func printSummary(stats feed.Stats, bk *book.Book, logs logx.Metrics, elapsed time.Duration) {
+func printSummary(stats replay.Stats, bk *book.Book, logs logx.Metrics, elapsed time.Duration) {
 	bbo := bk.BBOSnapshot()
 	fmt.Fprintln(os.Stderr, "\n--- replay complete ---")
 	fmt.Fprintf(os.Stderr, "applied=%d snapshots=%d deltas=%d deletes=%d absent_deletes=%d discarded=%d invalidated=%d\n",

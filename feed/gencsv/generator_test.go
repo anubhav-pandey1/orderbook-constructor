@@ -8,11 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"orderbook/book"
-	"orderbook/feed"
-	"orderbook/feed/gencsv"
-	"orderbook/internal/clock"
-	"orderbook/internal/syncx"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed/gencsv"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 func TestRecordGeneratorDeterministic(t *testing.T) {
@@ -61,10 +60,11 @@ func TestGeneratedCSVReplay(t *testing.T) {
 
 	dec := feed.NewDecoder(&buf)
 	bk := book.New(512)
-	sync := syncx.NewTimestampPolicy(syncx.TimestampStep, cfg.TSStep)
-
-	st, err := feed.Replay(context.Background(), dec, bk, sync, nil, nil,
-		feed.ReplayCfg{Mode: feed.Fast, Speed: 1, TSUnit: time.Millisecond, Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"}}, clock.NewReal())
+	st, err := replay.Run(context.Background(), dec, bk, nil, replay.Options{
+		Mode: replay.Fast, Speed: 1, TimestampUnit: time.Millisecond,
+		Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"},
+		Policy: replay.NewTimestampPolicy(replay.TimestampStep, cfg.TSStep),
+	})
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -102,10 +102,11 @@ func TestGeneratedCSVStressNoCross(t *testing.T) {
 
 	dec := feed.NewDecoder(&buf)
 	bk := book.New(512)
-	sync := syncx.NewTimestampPolicy(syncx.TimestampStep, cfg.TSStep)
-
-	if _, err := feed.Replay(context.Background(), dec, bk, sync, nil, nil,
-		feed.ReplayCfg{Mode: feed.Fast, Speed: 1, TSUnit: time.Millisecond, Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"}}, clock.NewReal()); err != nil {
+	if _, err := replay.Run(context.Background(), dec, bk, nil, replay.Options{
+		Mode: replay.Fast, Speed: 1, TimestampUnit: time.Millisecond,
+		Stream: feed.StreamID{Exchange: "binance", Symbol: "BTCUSDT"},
+		Policy: replay.NewTimestampPolicy(replay.TimestampStep, cfg.TSStep),
+	}); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 }

@@ -7,14 +7,18 @@ import (
 )
 
 type Price int64
+
 type Quantity int64
+
 type Ticks = Price
+
 type Qty = Quantity
 
 type Side uint8
 
 const (
 	Bid Side = iota + 1
+
 	Ask
 )
 
@@ -30,17 +34,23 @@ func (s Side) String() string {
 }
 
 const (
-	PriceScale      int64 = 100
-	QtyScale        int64 = 10000
-	PriceFracDigits       = 2
-	QtyFracDigits         = 4
+	PriceScale int64 = 100
+
+	QtyScale int64 = 10000
+
+	PriceFracDigits = 2
+
+	QtyFracDigits = 4
 )
 
 var (
 	ErrEmptyNumber = errors.New("empty numeric field")
-	ErrSyntax      = errors.New("invalid numeric syntax")
-	ErrPrecision   = errors.New("excess decimal precision")
-	ErrOverflow    = errors.New("numeric overflow")
+
+	ErrSyntax = errors.New("invalid numeric syntax")
+
+	ErrPrecision = errors.New("excess decimal precision")
+
+	ErrOverflow = errors.New("numeric overflow")
 )
 
 func parseScaled(s string, fracDigits int) (int64, error) {
@@ -129,7 +139,8 @@ func (q Quantity) AppendText(dst []byte) []byte {
 	return appendFixed(dst, int64(q), uint64(QtyScale), QtyFracDigits)
 }
 
-func (p Price) String() string    { return string(p.AppendText(nil)) }
+func (p Price) String() string { return string(p.AppendText(nil)) }
+
 func (q Quantity) String() string { return string(q.AppendText(nil)) }
 
 type Level struct {
@@ -161,8 +172,11 @@ type DeltaKind uint8
 
 const (
 	LevelInserted DeltaKind = iota + 1
+
 	LevelUpdated
+
 	LevelDeleted
+
 	AbsentDelete
 )
 

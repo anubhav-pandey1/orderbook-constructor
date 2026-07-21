@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"orderbook/book"
-	"orderbook/feed"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
 )
 
 const csvHeader = "type,exchange,symbol,timestamp,side,bids,asks,price,size"

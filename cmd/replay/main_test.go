@@ -14,7 +14,7 @@ func TestFlagDefaultsMatchSpecification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.csvPath != "./btc_orderbook_updates.csv" || cfg.exchange != "binance" || cfg.symbol != "BTCUSDT" {
+	if cfg.csvPath != "./testdata/btc_orderbook_updates.csv" || cfg.exchange != "binance" || cfg.symbol != "BTCUSDT" {
 		t.Fatalf("unexpected input defaults: %+v", cfg)
 	}
 	if cfg.replayMode != "fast" || cfg.speed != 1 || cfg.timestampUnit != "auto" {
@@ -158,7 +158,7 @@ func TestLogFileCannotOverwriteInput(t *testing.T) {
 
 	alias := filepath.Join(dir, "feed-alias.csv")
 	if err := os.Symlink(path, alias); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink creation is not permitted on this system: %v", err)
 	}
 	if err := run([]string{"-csv", path, "-log", "file", "-log-file", alias}); err == nil {
 		t.Fatal("run unexpectedly allowed a symlinked log file to overwrite input")

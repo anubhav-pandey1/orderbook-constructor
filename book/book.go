@@ -7,12 +7,18 @@ import (
 
 var (
 	ErrCrossedSnapshot = errors.New("crossed snapshot")
-	ErrCrossedDelta    = errors.New("delta crossed book")
-	ErrEmptySnapshot   = errors.New("snapshot has no levels")
-	ErrDuplicatePrice  = errors.New("duplicate price in snapshot")
+
+	ErrCrossedDelta = errors.New("delta crossed book")
+
+	ErrEmptySnapshot = errors.New("snapshot has no levels")
+
+	ErrDuplicatePrice = errors.New("duplicate price in snapshot")
+
 	ErrInvalidQuantity = errors.New("invalid quantity")
-	ErrInvalidPrice    = errors.New("invalid price")
-	ErrInvalidSide     = errors.New("invalid side")
+
+	ErrInvalidPrice = errors.New("invalid price")
+
+	ErrInvalidSide = errors.New("invalid side")
 )
 
 const defaultLevelHint = 256
@@ -162,7 +168,8 @@ func (b *Book) Invalidate() {
 }
 
 func (b *Book) BBOSnapshot() BBO { return b.quotes.load() }
-func (b *Book) Version() uint64  { return b.quotes.load().Version }
+
+func (b *Book) Version() uint64 { return b.quotes.load().Version }
 
 func (b *Book) DepthSnapshot() Depth {
 	depth := Depth{
@@ -181,4 +188,5 @@ func (b *Book) DepthSnapshot() Depth {
 }
 
 func (b *Book) BidLevelCount() int { return len(b.bids.levels) }
+
 func (b *Book) AskLevelCount() int { return len(b.asks.levels) }

@@ -3,19 +3,19 @@ package strategy
 import (
 	"context"
 	"errors"
-	"orderbook/internal/bench"
-	"orderbook/internal/clock"
-	"orderbook/internal/logx"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/bench"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/clock"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/logx"
+	"github.com/anubhav-pandey1/orderbook-constructor/internal/ring"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 const defaultSpinIters = 128
 
-type Strategy interface{ OnEvent(pipeline.Event, int64) }
+type Strategy interface{ OnEvent(replay.Event, int64) }
 type Latency struct{ IngressToRecv, ApplyToRecv, DueToRecv, SchedulerLateness *bench.Hist }
 
-func (l *Latency) Record(e pipeline.Event, recv int64) {
+func (l *Latency) Record(e replay.Event, recv int64) {
 	if l == nil {
 		return
 	}
@@ -40,7 +40,7 @@ type NopStrategy struct {
 	Latency *Latency
 }
 
-func (s *NopStrategy) OnEvent(e pipeline.Event, r int64) {
+func (s *NopStrategy) OnEvent(e replay.Event, r int64) {
 	if s == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func NewLogStrategy(ctx context.Context, l *logx.Logger, h *Latency) *LogStrateg
 	}
 	return &LogStrategy{logger: l, latency: h, ctx: ctx}
 }
-func (s *LogStrategy) OnEvent(e pipeline.Event, r int64) {
+func (s *LogStrategy) OnEvent(e replay.Event, r int64) {
 	if s == nil || s.err != nil {
 		return
 	}
@@ -88,10 +88,10 @@ func (s *LogStrategy) Close() error {
 	return s.logger.Close()
 }
 func (s *LogStrategy) Actionable() bool { return s != nil && s.actionable }
-func Run(ctx context.Context, in *ring.SPSC[pipeline.Event], s Strategy, c clock.Clock) error {
+func Run(ctx context.Context, in *ring.SPSC[replay.Event], s Strategy, c clock.Clock) error {
 	return RunWithSpin(ctx, in, s, c, defaultSpinIters)
 }
-func RunWithSpin(ctx context.Context, in *ring.SPSC[pipeline.Event], s Strategy, c clock.Clock, spin int) (err error) {
+func RunWithSpin(ctx context.Context, in *ring.SPSC[replay.Event], s Strategy, c clock.Clock, spin int) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

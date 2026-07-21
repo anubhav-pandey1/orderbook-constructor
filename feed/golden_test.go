@@ -8,37 +8,33 @@ import (
 	"testing"
 	"time"
 
-	"orderbook/book"
-	"orderbook/feed"
-	"orderbook/internal/pipeline"
-	"orderbook/internal/ring"
-	"orderbook/internal/syncx"
+	"github.com/anubhav-pandey1/orderbook-constructor/book"
+	"github.com/anubhav-pandey1/orderbook-constructor/feed"
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 func TestGoldenFixture(t *testing.T) {
-	f, err := os.Open("../btc_orderbook_updates.csv")
+	f, err := os.Open("../testdata/btc_orderbook_updates.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	out, err := ring.NewSPSC[pipeline.Event](4096)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events := &eventCollector{}
 	bk := book.New(512)
-	stats, err := feed.Replay(context.Background(), feed.NewDecoder(f), bk,
-		syncx.NewTimestampPolicy(syncx.TimestampStep, 100), nil, out,
-		feed.ReplayCfg{Mode: feed.Fast, Speed: 1, TSUnit: time.Millisecond, SpinIters: 16, Stream: fixtureStream}, &testClock{now: 1000})
+	stats, err := replay.Run(context.Background(), feed.NewDecoder(f), bk, events,
+		replay.Options{
+			Mode: replay.Fast, Speed: 1, TimestampUnit: time.Millisecond, Stream: fixtureStream,
+			Policy: replay.NewTimestampPolicy(replay.TimestampStep, 100), Clock: &testClock{now: 1000},
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := drainEvents(out)
 	depth := bk.DepthSnapshot()
 	checks := []struct {
 		name      string
 		got, want int64
 	}{
-		{"applied", int64(stats.Applied), 2242}, {"version", int64(bk.Version()), 2242}, {"events", int64(len(events)), 2242},
+		{"applied", int64(stats.Applied), 2242}, {"version", int64(bk.Version()), 2242}, {"events", int64(len(events.events)), 2242},
 		{"snapshots", int64(stats.Snapshots), 2}, {"deltas", int64(stats.Deltas), 2240}, {"deletes", int64(stats.Deletes), 543},
 		{"absent deletes", int64(stats.AbsentDeletes), 5}, {"bids", int64(len(depth.Bids)), 227}, {"asks", int64(len(depth.Asks)), 301},
 	}
@@ -50,7 +46,7 @@ func TestGoldenFixture(t *testing.T) {
 	if stats.Invalidated != 0 || stats.Discarded != 0 || stats.Crossed != 0 || stats.Gaps != 0 {
 		t.Errorf("sync stats=%+v", stats)
 	}
-	for i, ev := range events {
+	for i, ev := range events.events {
 		want := uint64(i + 1)
 		if ev.NotificationID != want || ev.Version != want {
 			t.Fatalf("event[%d]=%+v", i, ev)
@@ -63,7 +59,7 @@ func TestGoldenFixture(t *testing.T) {
 }
 
 func TestGoldenFixtureAgainstNaiveReference(t *testing.T) {
-	f, err := os.Open("../btc_orderbook_updates.csv")
+	f, err := os.Open("../testdata/btc_orderbook_updates.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
