@@ -333,14 +333,9 @@ func (b *simBook) nextDelta() (side string, ticks, qty int64) {
 		} else {
 			side, ticks = "ask", bestAsk
 		}
-		if b.rng.Intn(5) == 0 {
-			qty = 0
-			if len(b.sideMap(side)) <= 1 {
-				qty = b.randomQty()
-			} else {
-				b.set(side, ticks, 0)
-				return side, ticks, 0
-			}
+		if b.rng.Intn(5) == 0 && len(b.sideMap(side)) > 1 {
+			b.set(side, ticks, 0)
+			return side, ticks, 0
 		}
 		qty = b.randomQty()
 		b.set(side, ticks, qty)
