@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anubhav-pandey1/orderbook-constructor/replay"
 )
 
 func TestFlagDefaultsMatchSpecification(t *testing.T) {
@@ -30,20 +32,31 @@ func TestFlagDefaultsMatchSpecification(t *testing.T) {
 
 func TestParseSyncPolicyConfiguration(t *testing.T) {
 	for _, tc := range []struct {
-		name, mode string
-		step, unit time.Duration
-		ok         bool
+		name, mode, wantErr string
+		step, unit          time.Duration
+		wantDecision        replay.Decision
 	}{
-		{"timestamp", "step", 100 * time.Millisecond, time.Millisecond, true},
-		{"timestamp", "monotonic", 0, time.Millisecond, true},
-		{"timestamp", "step", 1500 * time.Microsecond, time.Millisecond, false},
-		{"off", "ignored", 0, time.Millisecond, true},
-		{"update-id", "step", time.Millisecond, time.Millisecond, false},
-		{"bogus", "step", time.Millisecond, time.Millisecond, false},
+		{"timestamp", "step", "", 100 * time.Millisecond, time.Millisecond, replay.Decision{Action: replay.Apply}},
+		{"timestamp", "monotonic", "", 0, time.Millisecond, replay.Decision{Action: replay.Apply}},
+		{"timestamp", "step", "exact multiple", 1500 * time.Microsecond, time.Millisecond, replay.Decision{}},
+		{"off", "ignored", "", 0, time.Millisecond, replay.Decision{Action: replay.Apply}},
+		{"update-id", "step", "requires update-ID fields", time.Millisecond, time.Millisecond, replay.Decision{}},
+		{"bogus", "step", "invalid sync policy", time.Millisecond, time.Millisecond, replay.Decision{}},
 	} {
-		_, err := parseSyncPolicy(tc.name, tc.mode, tc.step, tc.unit)
-		if (err == nil) != tc.ok {
-			t.Errorf("parseSyncPolicy(%q, %q) error=%v, want success=%v", tc.name, tc.mode, err, tc.ok)
+		p, err := parseSyncPolicy(tc.name, tc.mode, tc.step, tc.unit)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("parseSyncPolicy(%q, %q) error=%v, want substring %q", tc.name, tc.mode, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseSyncPolicy(%q, %q) unexpected error=%v", tc.name, tc.mode, err)
+			continue
+		}
+		p.AcceptSnapshot(replay.Cursor{Timestamp: 1000})
+		if got := p.ClassifyUpdate(replay.Cursor{Timestamp: 1100}); got != tc.wantDecision {
+			t.Errorf("parseSyncPolicy(%q, %q) decision=%+v want %+v", tc.name, tc.mode, got, tc.wantDecision)
 		}
 	}
 }
@@ -108,7 +121,10 @@ func TestRunDrainsPipelineInOrder(t *testing.T) {
 		t.Fatalf("log records = %q, want two lines", text)
 	}
 	first, second, _ := strings.Cut(text, "\n")
-	if !strings.Contains(first, "notification=1") || !strings.Contains(second, "notification=2") {
+	if !strings.Contains(first, "notification=1") || !strings.Contains(first, "version=1") || !strings.Contains(first, "kind=1") {
+		t.Fatalf("first notification incomplete: %q", first)
+	}
+	if !strings.Contains(second, "notification=2") || !strings.Contains(second, "version=2") || !strings.Contains(second, "kind=2") || !strings.Contains(second, "bid=100.00x1.5000") {
 		t.Fatalf("notifications not ordered: %q", text)
 	}
 }
@@ -125,14 +141,15 @@ func TestFatalDecodeStillDrainsAcceptedEvents(t *testing.T) {
 		"-csv", input, "-log", "file", "-log-file", output,
 		"-event-ring", "2", "-log-ring", "2",
 	})
-	if err == nil {
-		t.Fatal("run unexpectedly accepted malformed row")
+	if err == nil || !strings.Contains(err.Error(), "unknown type") {
+		t.Fatalf("malformed row err=%v", err)
 	}
 	data, readErr := os.ReadFile(output)
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if strings.Count(string(data), "\n") != 1 {
+	text := string(data)
+	if strings.Count(text, "\n") != 1 || !strings.Contains(text, "notification=1") || !strings.Contains(text, "version=1") {
 		t.Fatalf("accepted notification was not drained: %q", data)
 	}
 }
@@ -145,8 +162,8 @@ func TestLogFileCannotOverwriteInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"-csv", path, "-log", "file", "-log-file", path}); err == nil {
-		t.Fatal("run unexpectedly allowed log file to overwrite input")
+	if err := run([]string{"-csv", path, "-log", "file", "-log-file", path}); err == nil || !strings.Contains(err.Error(), "overwrite") {
+		t.Fatalf("same-path overwrite err=%v", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -160,8 +177,8 @@ func TestLogFileCannotOverwriteInput(t *testing.T) {
 	if err := os.Symlink(path, alias); err != nil {
 		t.Skipf("symlink creation is not permitted on this system: %v", err)
 	}
-	if err := run([]string{"-csv", path, "-log", "file", "-log-file", alias}); err == nil {
-		t.Fatal("run unexpectedly allowed a symlinked log file to overwrite input")
+	if err := run([]string{"-csv", path, "-log", "file", "-log-file", alias}); err == nil || !strings.Contains(err.Error(), "overwrite") {
+		t.Fatalf("symlink overwrite err=%v", err)
 	}
 }
 

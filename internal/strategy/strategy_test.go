@@ -26,6 +26,6 @@ func TestReceiveBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.recv != 300 || c.v != 7 {
-		t.Fatalf("%+v", c)
+		t.Fatalf("capture recv/version=%d/%d, want 300/7", c.recv, c.v)
 	}
 }

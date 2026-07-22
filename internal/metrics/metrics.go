@@ -98,11 +98,11 @@ func (h *Histogram) Percentile(q float64) int64 {
 	if h.count == 0 {
 		return 0
 	}
-	if q < 0 {
-		q = 0
+	if q <= 0 {
+		return h.min
 	}
-	if q > 1 {
-		q = 1
+	if q >= 1 {
+		return h.max
 	}
 	rank := uint64(math.Ceil(q * float64(h.count)))
 	if rank == 0 {

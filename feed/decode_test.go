@@ -62,31 +62,36 @@ func TestNormalizeStreamID(t *testing.T) {
 			t.Errorf("normalize = %+v,%v want %+v", got, err, tc.want)
 		}
 	}
-	for _, tc := range [][2]string{{"", "BTCUSDT"}, {"binance", ""}, {"binance", "/_-"}} {
-		if _, err := feed.NormalizeStreamID(tc[0], tc[1]); err == nil {
-			t.Errorf("expected error for %q/%q", tc[0], tc[1])
+	for _, tc := range []struct {
+		exchange, symbol, want string
+	}{
+		{"", "BTCUSDT", "non-empty exchange"},
+		{"binance", "", "non-empty exchange"},
+		{"binance", "/_-", "empty normalized symbol"},
+	} {
+		if _, err := feed.NormalizeStreamID(tc.exchange, tc.symbol); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("NormalizeStreamID(%q, %q) error=%v, want substring %q", tc.exchange, tc.symbol, err, tc.want)
 		}
 	}
 }
 
 func TestDecodeRejectsSchemaViolations(t *testing.T) {
-	for _, tc := range []struct{ name, csv string }{
-		{"bad header", buildCSV("kind,exchange,symbol,timestamp,side,bids,asks,price,size")},
-		{"bad side", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1003,BUY,,,100.00,1.0`)},
-		{"bad timestamp", buildCSV(csvHeader, `incremental,binance,BTC/USDT,x,bid,,,100.00,1.0`)},
-		{"negative timestamp", buildCSV(csvHeader, `incremental,binance,BTC/USDT,-1,bid,,,100.00,1.0`)},
-		{"unknown type", buildCSV(csvHeader, `weird,binance,BTC/USDT,1004,bid,,,100.00,1.0`)},
-		{"snapshot side populated", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,bid,[],[],,`)},
-		{"delta bids populated", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1000,bid,[],,100.0,1.0`)},
-		{"empty exchange", buildCSV(csvHeader, `incremental,,BTC/USDT,1000,bid,,,100.0,1.0`)},
-		{"trailing json", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,,"[] true",[],,`)},
-		{"bad arity", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,,"[[100.0]]",[],,`)},
-		{"exponent", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1000,bid,,,1e2,1.0`)},
+	for _, tc := range []struct{ name, csv, want string }{
+		{"bad header", buildCSV("kind,exchange,symbol,timestamp,side,bids,asks,price,size"), "got header"},
+		{"bad side", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1003,BUY,,,100.00,1.0`), "invalid side"},
+		{"bad timestamp", buildCSV(csvHeader, `incremental,binance,BTC/USDT,x,bid,,,100.00,1.0`), `timestamp "x"`},
+		{"negative timestamp", buildCSV(csvHeader, `incremental,binance,BTC/USDT,-1,bid,,,100.00,1.0`), "timestamp must be non-negative"},
+		{"unknown type", buildCSV(csvHeader, `weird,binance,BTC/USDT,1004,bid,,,100.00,1.0`), "unknown type"},
+		{"snapshot side populated", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,bid,[],[],,`), "side must be empty"},
+		{"delta bids populated", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1000,bid,[],,100.0,1.0`), "bids must be empty"},
+		{"empty exchange", buildCSV(csvHeader, `incremental,,BTC/USDT,1000,bid,,,100.0,1.0`), "stream identity requires"},
+		{"trailing json", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,,"[] true",[],,`), "unexpected JSON value"},
+		{"bad arity", buildCSV(csvHeader, `snapshot,binance,BTC/USDT,1000,,"[[100.0]]",[],,`), "must contain price and size"},
+		{"exponent", buildCSV(csvHeader, `incremental,binance,BTC/USDT,1000,bid,,,1e2,1.0`), "invalid numeric syntax"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := feed.NewDecoder(strings.NewReader(tc.csv)).Next(); err == nil {
-				t.Fatal("expected error")
-			}
+			_, err := feed.NewDecoder(strings.NewReader(tc.csv)).Next()
+			requireFeedErrorContains(t, err, tc.want)
 		})
 	}
 }
