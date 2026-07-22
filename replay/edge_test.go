@@ -75,7 +75,7 @@ func TestRunDefaultOptionsAndNilHandler(t *testing.T) {
 		`incremental,binance,BTC/USDT,900,bid,,,100.00,2.0`,
 	)
 	bk := book.New(4)
-	stats, err := Run(nil, feed.NewDecoder(strings.NewReader(data)), bk, nil, Options{Stream: testStream})
+	stats, err := Run(context.TODO(), feed.NewDecoder(strings.NewReader(data)), bk, nil, Options{Stream: testStream})
 	if err != nil {
 		t.Fatal(err)
 	}

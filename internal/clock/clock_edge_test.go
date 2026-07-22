@@ -17,7 +17,7 @@ func TestRealSleepPastAndCanceledContext(t *testing.T) {
 	if err := r.SleepUntilNS(ctx, r.NowNS()+int64(time.Second)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}
-	if err := r.SleepUntilNS(nil, r.NowNS()-1); err != nil {
+	if err := r.SleepUntilNS(context.TODO(), r.NowNS()-1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -36,7 +36,7 @@ func TestSimCancelNoopAdvanceAndMultipleWaiters(t *testing.T) {
 		t.Fatalf("cancel err=%v", err)
 	}
 	waiters := make(chan error, 2)
-	go func() { waiters <- s.SleepUntilNS(nil, 15) }()
+	go func() { waiters <- s.SleepUntilNS(context.TODO(), 15) }()
 	go func() { waiters <- s.SleepUntilNS(context.Background(), 15) }()
 	s.Advance(5 * time.Nanosecond)
 	for i := 0; i < 2; i++ {

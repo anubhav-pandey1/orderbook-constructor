@@ -37,7 +37,7 @@ func TestRunWithSpinNilDependencies(t *testing.T) {
 		{q, nil, c},
 		{q, &NopStrategy{}, nil},
 	} {
-		if err := RunWithSpin(nil, tc.q, tc.s, tc.c, -1); err == nil || err.Error() != "strategy: nil dependency" {
+		if err := RunWithSpin(context.TODO(), tc.q, tc.s, tc.c, -1); err == nil || err.Error() != "strategy: nil dependency" {
 			t.Fatalf("q=%v strategy=%T clock=%T err=%v", tc.q, tc.s, tc.c, err)
 		}
 	}
@@ -77,7 +77,7 @@ func TestLatencyAndNopNilSafety(t *testing.T) {
 }
 
 func TestLogStrategyNilAndActionable(t *testing.T) {
-	s := NewLogStrategy(nil, nil, nil)
+	s := NewLogStrategy(context.TODO(), nil, nil)
 	s.OnEvent(replay.Event{Kind: replay.SnapshotApplied, State: replay.Synchronized}, 1)
 	if !s.Actionable() || s.Err() != nil {
 		t.Fatalf("strategy actionable/err=%v/%v", s.Actionable(), s.Err())

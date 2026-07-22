@@ -14,7 +14,7 @@ func TestConsumeWaitCloseUnblocksEmptyConsumer(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		v, ok, err := r.ConsumeWait(nil, -1)
+		v, ok, err := r.ConsumeWait(context.TODO(), -1)
 		if err != nil {
 			done <- err
 			return
@@ -44,10 +44,10 @@ func TestPublishNegativeSpinAndNilContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Publish(nil, 1, -10); err != nil {
+	if err := r.Publish(context.TODO(), 1, -10); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Publish(nil, 2, -10); err != nil {
+	if err := r.Publish(context.TODO(), 2, -10); err != nil {
 		t.Fatal(err)
 	}
 	if r.TryPublish(3) {
