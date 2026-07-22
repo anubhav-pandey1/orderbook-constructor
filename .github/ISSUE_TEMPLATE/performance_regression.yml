@@ -1,0 +1,28 @@
+name: Performance regression
+description: Report slower benchmarks, higher allocations, or memory growth.
+title: "perf: "
+labels:
+  - performance
+  - needs-benchmark
+body:
+  - type: textarea
+    id: benchmark
+    attributes:
+      label: Benchmark output
+      description: Include command, hardware, OS, Go version, and before/after output.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit range
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Include fixture size, workload, and any profiling observations.
+    validations:
+      required: false
