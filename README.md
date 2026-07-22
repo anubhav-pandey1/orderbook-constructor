@@ -1,5 +1,9 @@
 # orderbook-constructor
 
+[![CI](https://github.com/anubhav-pandey1/orderbook-constructor/actions/workflows/ci.yml/badge.svg)](https://github.com/anubhav-pandey1/orderbook-constructor/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/anubhav-pandey1/orderbook-constructor.svg)](https://pkg.go.dev/github.com/anubhav-pandey1/orderbook-constructor)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `orderbook-constructor` is a Go library for constructing an aggregated level-2
 order book from snapshots and incremental updates. It provides fixed-point book
 types, CSV decoding, synchronization policies, and a replay runner with callback
@@ -110,3 +114,4 @@ backward-compatible API, and breaking changes require a new major version. A
 future `v2` release will use the Go module path suffix `/v2`.
 
 See `CHANGELOG.md` for release notes and migration guidance.
+See `docs/RELEASE.md` for the release process and tag policy.

@@ -1,0 +1,39 @@
+name: Replay or data correctness
+description: Report a book, feed, or synchronization correctness issue.
+title: "correctness: "
+labels:
+  - bug
+  - needs-repro
+body:
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal fixture
+      description: Provide the smallest CSV rows or generator config that reproduces the issue.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      options:
+        - book
+        - feed
+        - feed/gencsv
+        - replay
+        - cmd tooling
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected book state or replay stats
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual book state or replay stats
+    validations:
+      required: true
