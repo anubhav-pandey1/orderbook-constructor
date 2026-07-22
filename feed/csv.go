@@ -12,23 +12,32 @@ import (
 	"github.com/anubhav-pandey1/orderbook-constructor/book"
 )
 
+// Kind identifies the decoded feed record type.
 type Kind uint8
 
 const (
+	// KindSnapshot identifies a full book snapshot record.
 	KindSnapshot Kind = iota + 1
 
+	// KindDelta identifies an incremental level update record.
 	KindDelta
 
+	// KindIncremental is an alias for KindDelta.
 	KindIncremental = KindDelta
 )
 
+// StreamID identifies one normalized exchange and symbol stream.
 type StreamID struct {
+	// Exchange is lowercase and trimmed.
 	Exchange string
-	Symbol   string
+	// Symbol is uppercase with common separators removed.
+	Symbol string
 }
 
+// String returns exchange:symbol.
 func (s StreamID) String() string { return s.Exchange + ":" + s.Symbol }
 
+// NormalizeStreamID normalizes exchange and symbol into the canonical stream key.
 func NormalizeStreamID(exchange, symbol string) (StreamID, error) {
 	exchange = strings.ToLower(strings.TrimSpace(exchange))
 	symbol = strings.TrimSpace(symbol)
@@ -51,30 +60,44 @@ func NormalizeStreamID(exchange, symbol string) (StreamID, error) {
 	return StreamID{Exchange: exchange, Symbol: b.String()}, nil
 }
 
+// Record is one decoded snapshot or incremental update.
 type Record struct {
-	Kind   Kind
-	Line   int
+	// Kind identifies whether the record is a snapshot or delta.
+	Kind Kind
+	// Line is the one-based CSV line number of the record.
+	Line int
+	// Stream identifies the normalized market stream.
 	Stream StreamID
-	TS     int64
+	// TS is the non-negative source timestamp as encoded by the feed.
+	TS int64
 
+	// Side is set for delta records.
 	Side book.Side
-	Px   book.Price
-	Qty  book.Quantity
+	// Px is set for delta records.
+	Px book.Price
+	// Qty is set for delta records.
+	Qty book.Quantity
+	// Snap is set for snapshot records.
 	Snap *book.Snapshot
 
+	// FirstUpdateID is the first exchange update ID covered by the record when present.
 	FirstUpdateID uint64
+	// FinalUpdateID is the final exchange update ID covered by the record when present.
 	FinalUpdateID uint64
-	HasUpdateID   bool
+	// HasUpdateID reports whether FirstUpdateID and FinalUpdateID are meaningful.
+	HasUpdateID bool
 }
 
 var csvColumns = [...]string{"type", "exchange", "symbol", "timestamp", "side", "bids", "asks", "price", "size"}
 
+// Decoder reads CSV records in the library feed schema.
 type Decoder struct {
 	r          *csv.Reader
 	record     int
 	headerRead bool
 }
 
+// NewDecoder constructs a CSV decoder over rd.
 func NewDecoder(rd io.Reader) *Decoder {
 	r := csv.NewReader(rd)
 	r.FieldsPerRecord = len(csvColumns)
@@ -82,6 +105,7 @@ func NewDecoder(rd io.Reader) *Decoder {
 	return &Decoder{r: r}
 }
 
+// Next returns the next record or io.EOF after the final record.
 func (d *Decoder) Next() (Record, error) {
 	if !d.headerRead {
 		fields, err := d.r.Read()

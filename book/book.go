@@ -6,23 +6,34 @@ import (
 )
 
 var (
+	// ErrCrossedSnapshot reports a snapshot whose best bid is greater than or equal to its best ask.
 	ErrCrossedSnapshot = errors.New("crossed snapshot")
 
+	// ErrCrossedDelta reports a delta that would lock or cross the book.
 	ErrCrossedDelta = errors.New("delta crossed book")
 
+	// ErrEmptySnapshot reports a nil snapshot or a snapshot with no levels.
 	ErrEmptySnapshot = errors.New("snapshot has no levels")
 
+	// ErrDuplicatePrice reports repeated prices on one side of a snapshot.
 	ErrDuplicatePrice = errors.New("duplicate price in snapshot")
 
+	// ErrInvalidQuantity reports a negative delta quantity or non-positive snapshot quantity.
 	ErrInvalidQuantity = errors.New("invalid quantity")
 
+	// ErrInvalidPrice reports a negative price.
 	ErrInvalidPrice = errors.New("invalid price")
 
+	// ErrInvalidSide reports a side other than Bid or Ask.
 	ErrInvalidSide = errors.New("invalid side")
 )
 
 const defaultLevelHint = 256
 
+// Book stores aggregated level-2 depth for one stream.
+//
+// Mutating methods are intended for a single writer goroutine. BBOSnapshot and
+// Version may be called concurrently with that writer.
 type Book struct {
 	capHint int
 	version uint64
@@ -31,6 +42,7 @@ type Book struct {
 	quotes  quoteCache
 }
 
+// New constructs an empty book sized for approximately capHint levels per side.
 func New(capHint int) *Book {
 	if capHint <= 0 {
 		capHint = defaultLevelHint
@@ -44,6 +56,7 @@ func New(capHint int) *Book {
 	return b
 }
 
+// ApplySnapshot transactionally replaces the book with sn and returns the new BBO.
 func (b *Book) ApplySnapshot(sn *Snapshot) (BBO, error) {
 	if sn == nil || len(sn.Bids)+len(sn.Asks) == 0 {
 		return BBO{}, ErrEmptySnapshot
@@ -93,6 +106,9 @@ func buildSide(side Side, levels []Level, capHint int) (sideBook, error) {
 	return s, nil
 }
 
+// ApplyDelta applies one level update and returns the resulting BBO.
+//
+// A zero quantity deletes the level when present and is accepted when absent.
 func (b *Book) ApplyDelta(side Side, px Price, qty Quantity) (DeltaResult, error) {
 	if px < 0 {
 		return DeltaResult{}, ErrInvalidPrice
@@ -161,16 +177,22 @@ func (b *Book) privateBBO(version uint64) BBO {
 	}
 }
 
+// Invalidate clears all levels without advancing Version.
 func (b *Book) Invalidate() {
 	b.bids = newSideBook(Bid, b.capHint)
 	b.asks = newSideBook(Ask, b.capHint)
 	b.quotes.store(BBO{Version: b.version})
 }
 
+// BBOSnapshot returns the latest published best-bid-offer snapshot.
 func (b *Book) BBOSnapshot() BBO { return b.quotes.load() }
 
+// Version returns the latest published book version.
 func (b *Book) Version() uint64 { return b.quotes.load().Version }
 
+// DepthSnapshot returns independent sorted copies of both sides.
+//
+// DepthSnapshot should not be called concurrently with mutating methods.
 func (b *Book) DepthSnapshot() Depth {
 	depth := Depth{
 		Bids: make([]Level, 0, len(b.bids.levels)),
@@ -187,6 +209,8 @@ func (b *Book) DepthSnapshot() Depth {
 	return depth
 }
 
+// BidLevelCount returns the number of active bid levels.
 func (b *Book) BidLevelCount() int { return len(b.bids.levels) }
 
+// AskLevelCount returns the number of active ask levels.
 func (b *Book) AskLevelCount() int { return len(b.asks.levels) }
