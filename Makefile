@@ -1,4 +1,4 @@
-.PHONY: build run benchmark test race fmt vet check hooks
+.PHONY: build run benchmark test race fmt vet staticcheck vuln check full-check tools hooks
 
 RUN_ARGS ?=
 
@@ -24,10 +24,20 @@ fmt:
 vet:
 	go vet ./...
 
+staticcheck:
+	./.bin/staticcheck ./...
+
+vuln:
+	./.bin/govulncheck ./...
+
 check:
-	test -z "$$(gofmt -l .)"
-	go vet ./...
-	go test ./...
+	./scripts/check.sh pre-commit
+
+full-check:
+	./scripts/check.sh full
+
+tools:
+	./scripts/install-tools.sh
 
 hooks:
 	git config core.hooksPath .githooks
