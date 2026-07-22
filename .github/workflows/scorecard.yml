@@ -8,15 +8,16 @@ on:
   schedule:
     - cron: "42 4 * * 1"
 
-permissions:
-  contents: read
-  id-token: write
-  security-events: write
+permissions: read-all
 
 jobs:
   scorecard:
     name: scorecard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
