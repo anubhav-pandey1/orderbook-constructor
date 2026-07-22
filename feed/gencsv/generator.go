@@ -16,18 +16,29 @@ const (
 	minSpread = int64(2)
 )
 
+// Config controls deterministic CSV generation.
 type Config struct {
-	Exchange      string
-	Symbol        string
-	StartTS       int64
-	TSStep        int64
-	Incrementals  int64
+	// Exchange is written to each generated row.
+	Exchange string
+	// Symbol is written to each generated row.
+	Symbol string
+	// StartTS is the timestamp of the initial snapshot.
+	StartTS int64
+	// TSStep is added to the timestamp for each generated record.
+	TSStep int64
+	// Incrementals is the number of post-snapshot rows to generate.
+	Incrementals int64
+	// LevelsPerSide is the number of initial levels on each side.
 	LevelsPerSide int
-	MaxLevels     int
+	// MaxLevels caps retained simulated levels per side.
+	MaxLevels int
+	// SnapshotEvery replaces every nth incremental row with a snapshot when positive.
 	SnapshotEvery int64
-	Seed          int64
+	// Seed initializes deterministic pseudo-random generation.
+	Seed int64
 }
 
+// DefaultConfig returns a deterministic large fixture configuration.
 func DefaultConfig() Config {
 	return Config{
 		Exchange:      "binance",
@@ -410,6 +421,7 @@ func writeIncremental(w *bufio.Writer, cfg Config, ts int64, side string, ticks,
 	return err
 }
 
+// Write writes a complete CSV fixture to w.
 func Write(w io.Writer, cfg Config) error {
 	if err := validateConfig(cfg); err != nil {
 		return err

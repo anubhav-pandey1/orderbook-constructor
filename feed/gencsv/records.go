@@ -9,6 +9,7 @@ import (
 	"github.com/anubhav-pandey1/orderbook-constructor/feed"
 )
 
+// Generator produces deterministic in-memory feed records from Config.
 type Generator struct {
 	cfg    Config
 	stream feed.StreamID
@@ -16,6 +17,7 @@ type Generator struct {
 	index  int64
 }
 
+// NewGenerator validates cfg and returns a deterministic record generator.
 func NewGenerator(cfg Config) (*Generator, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
@@ -27,6 +29,7 @@ func NewGenerator(cfg Config) (*Generator, error) {
 	return &Generator{cfg: cfg, stream: stream, book: newSimBook(cfg.LevelsPerSide, cfg.MaxLevels, rand.New(rand.NewSource(cfg.Seed)))}, nil
 }
 
+// Next returns the next generated record and false after exhaustion.
 func (g *Generator) Next() (feed.Record, bool) {
 	if g == nil || g.index > g.cfg.Incrementals {
 		return feed.Record{}, false
